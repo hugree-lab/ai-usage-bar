@@ -1,0 +1,5 @@
+*.command text eol=lf
+*.sh text eol=lf
+macos/*.py text eol=lf
+*.bat text eol=crlf
+*.vbs text eol=crlf

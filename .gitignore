@@ -1,0 +1,27 @@
+# Build artifacts & distribution binaries
+build/
+build_macos/
+dist/
+*.spec
+
+# Python caches & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Local runtime state, personal configs & logs
+data/
+*.tmp
+*.log
+*.bak
+quota_state.json
+quota_history.jsonl
+config.json
+hook_debug.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
