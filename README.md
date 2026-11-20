@@ -61,15 +61,37 @@ flowchart LR
 
 ### Windows 10 / 11 (No Python Required)
 1. Download **`AIUsageBar-Setup.exe`** from [Releases](../../releases) (or build locally with `python build_release.py`).
-2. Run the Setup Wizard — auto-detects English/Korean (with a `[한국어 | EN]` toggle in the header), installs `AIUsageBar.exe` + the 17 KB native `quota_hook.exe`, and connects official `statusLine` hooks after backing up your configs.
-3. Sign in once to each CLI you use:
-   - **Antigravity:** run `agy` once in terminal and sign in with Google.
-   - **Claude:** run `claude` → `/login` and choose **Claude account with subscription** (Pro/Max).
-   - **Codex (optional):** install/sign in to `codex` CLI or let the HUD read local session logs.
+2. Run the Setup Wizard — auto-detects English/Korean (with a `[한국어 | EN]` toggle in the header), installs `AIUsageBar.exe` + the lightweight zero-console native `quota_hook.exe`, and connects official `statusLine` hooks after backing up your existing configs.
+3. Complete the one-time CLI sign-in below for each provider you want to monitor.
 
 ### macOS (Apple Silicon / Intel)
 - Download **`AIUsageBar-macOS.dmg`** from [Releases](../../releases), or run `./macos/install_macos.command` directly from source.
 - See [`macos/README_macOS.md`](macos/README_macOS.md) for details.
+
+---
+
+## CLI Sign-In & Troubleshooting Guide
+
+Even if you mainly use the **Claude Desktop / Web** or **Antigravity Desktop** apps, AI Usage Bar reads live quotas through the official CLIs (`claude`, `agy`, `codex`) with zero usage deducted. Complete this one-time sign-in per provider:
+
+### 1. Claude (`claude`) — Pro / Max Subscription
+1. Open a terminal in any normal project folder and run `claude`.
+2. If prompted with *"Do you trust the files in this folder?"*, accept it once (required so silent `/usage` checks work in a trusted folder).
+3. Run `/login` inside Claude Code and **be sure to select `Claude account with subscription`** (not Console / API Usage Billing, which does not expose 5-hour or 7-day subscription quotas).
+4. **If Claude stops updating later** (e.g., after a Claude Code CLI auto-update or OAuth session expiry, or if the widget shows `⚠ Claude Pro/Max sign-in required (/login)`):
+   - Check status with `claude auth status` (should show `"loggedIn": true`).
+   - Run `claude` → `/login` → select **`Claude account with subscription`** once to restore live syncing, then click `↻` on the widget.
+
+### 2. Antigravity (`agy`)
+1. Install the official `agy` CLI (the Windows Setup Wizard can install it automatically, or run `irm https://antigravity.google/cli/install.ps1 | iex` in PowerShell).
+2. Run `agy` once in a terminal and sign in with your Google account.
+3. **If Antigravity stays on `Waiting` or stops updating:**
+   - Run `agy` in a terminal to confirm your Google login is active (if prompted to sign in again, re-authenticate).
+   - If another tool overwrote your CLI `statusLine` config, open **Settings (`⚙`) → Alerts & Key → `⚡ Reconnect Hooks`**, then click `↻`.
+
+### 3. Codex (`codex`, Optional)
+- Enable **Codex** in **Settings (`⚙`) → Display → Providers & Order**.
+- Sign in to the official `codex` CLI (or simply use Codex — AI Usage Bar automatically reads rate limits from local `~/.codex/sessions/**/*.jsonl` session logs as a fallback).
 
 ---
 
@@ -88,7 +110,7 @@ python3 macos/build_macos.py
 ```
 
 ### Automated Releases (GitHub Actions)
-Pushing a version tag (e.g. `git tag v1.8.0 && git push origin v1.8.0`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
+Pushing a version tag (e.g. `git tag v1.8.1 && git push origin v1.8.1`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
 
 ---
 

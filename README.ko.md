@@ -61,15 +61,38 @@ flowchart LR
 
 ### Windows 10 / 11 (Python 설치 불필요)
 1. [Releases](../../releases)에서 **`AIUsageBar-Setup.exe`**를 다운로드해 실행합니다.
-2. 설치 마법사(우측 상단 `[한국어 | EN]` 전환 지원)가 PC 환경을 자동 감지하고 기존 설정을 백업한 뒤 `AIUsageBar.exe` + 17KB 초경량 네이티브 `quota_hook.exe` 및 공식 `statusLine` 훅을 설치합니다.
-3. 최초 1회만 사용하는 CLI에 로그인해 두면 이후 자동 갱신됩니다:
-   - **Antigravity:** 터미널에서 `agy` 1회 실행 후 Google 계정 로그인
-   - **Claude:** 터미널에서 `claude` → `/login` 시 반드시 **Claude account with subscription** 선택
-   - **Codex (선택):** `codex` CLI 설치·로그인 또는 로컬 세션 기록 자동 연동
+2. 설치 마법사(우측 상단 `[한국어 | EN]` 전환 지원)가 PC 환경을 자동 감지하고 기존 설정을 백업한 뒤 `AIUsageBar.exe` + 무콘솔 네이티브 `quota_hook.exe` 및 공식 `statusLine` 훅을 설치합니다.
+3. 아래 안내에 따라 사용하는 CLI에 최초 1회 로그인을 완료합니다.
 
 ### macOS (Apple Silicon / Intel)
 - [Releases](../../releases)에서 **`AIUsageBar-macOS.dmg`**를 다운로드하거나, 소스 폴더의 `./macos/install_macos.command`를 실행하세요.
 - 자세한 내용은 [`macos/README_macOS.md`](macos/README_macOS.md)를 참고하세요.
+
+---
+
+## CLI 최초 로그인 & 문제 해결 가이드
+
+**Claude 데스크톱/웹**이나 **Antigravity 앱**만 주로 사용하시더라도, AI Usage Bar는 공식 CLI(`claude`, `agy`, `codex`)를 통해 사용량 차감 없이 실시간 한도를 조회합니다. 사용하는 AI별로 아래 1회 로그인만 해두시면 됩니다.
+
+### 1. Claude (`claude`) — Pro / Max 구독 계정
+1. 일반 작업 폴더에서 터미널을 열고 `claude`를 실행합니다.
+2. 폴더 신뢰 확인(*"Do you trust the files in this folder?"*)이 뜨면 1회 허용합니다. (백그라운드 `/usage` 조회가 안전하게 동작하는 데 필요합니다.)
+3. Claude Code 안에서 `/login`을 입력하고 **반드시 `Claude account with subscription`**을 선택해 로그인합니다.
+   - *(주의: Console / `API Usage Billing` 계정은 종량제 방식이라 5시간·주간 구독 한도가 표시되지 않습니다.)*
+4. **사용 중 Claude 수치가 업데이트되지 않을 때** (CLI 자동 업데이트나 OAuth 세션 만료로 로그인이 풀린 경우, 또는 위젯에 `⚠ Claude Pro/Max 로그인 필요 (/login)` 경고가 뜰 때):
+   - 터미널에서 `claude auth status`를 실행해 `"loggedIn": true`인지 확인합니다.
+   - 로그인이 풀려 있다면 터미널에서 `claude` → `/login` → **`Claude account with subscription`** 선택으로 1회 복구한 뒤 위젯의 `↻` 버튼을 누르면 바로 갱신됩니다.
+
+### 2. Antigravity (`agy`)
+1. 공식 `agy` CLI를 설치합니다. (Windows 설치 마법사에서 자동 설치 체크 가능, 또는 PowerShell에서 `irm https://antigravity.google/cli/install.ps1 | iex` 실행)
+2. 터미널에서 `agy`를 1회 실행하고 Google 계정으로 로그인합니다. (로그인 후 공식 `statusLine` 훅을 통해 주간 · Argon · 5시간 한도가 자동 반영됩니다.)
+3. **Antigravity가 `대기중`에 머물거나 갱신이 멈출 때:**
+   - 터미널에서 `agy`를 실행해 Google 로그인이 유지되어 있는지 확인합니다(재로그인 안내가 뜨면 로그인 진행).
+   - 다른 도구가 CLI의 `statusLine` 설정을 덮어썼다면 위젯의 **설정 (`⚙`) → 알림 · 단축키 → `⚡ 훅 재연결`**을 누른 뒤 `↻`로 새로고침합니다.
+
+### 3. Codex (`codex`, 선택 사항)
+- **설정 (`⚙`) → 화면 · 순서 → 표시할 AI 및 순서**에서 **Codex**를 켤 수 있습니다.
+- 공식 `codex` CLI에 로그인해 두거나, 로컬에서 Codex를 사용하면 `~/.codex/sessions/**/*.jsonl` 세션 기록의 한도 정보를 자동으로 읽어 표시합니다.
 
 ---
 
@@ -88,7 +111,7 @@ python3 macos/build_macos.py
 ```
 
 ### GitHub Actions 자동 릴리스
-버전 태그(`git tag v1.8.0 && git push origin v1.8.0`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
+버전 태그(`git tag v1.8.1 && git push origin v1.8.1`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
 
 ---
 
