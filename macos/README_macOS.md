@@ -1,4 +1,4 @@
-# AI Usage Bar — macOS Guide (`v1.8.0`)
+# AI Usage Bar — macOS Guide (`v1.8.1`)
 
 ## Quick Install (Run Directly on macOS)
 

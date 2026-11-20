@@ -37,7 +37,7 @@ def _to_shell_safe_path(path: Path) -> str:
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 AGY_SETTINGS = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 UNINSTALL_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AIUsageBar"
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.8.1"
 
 
 def find_codex_cli() -> Optional[str]:

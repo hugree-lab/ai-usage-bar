@@ -608,6 +608,31 @@ class SetupWizardApp:
                 ok, msg = install_agy_hook(install_dir)
                 self._emit("log", ("      [OK] " if ok else "      [WARN] ") + msg)
 
+            # Migrate legacy AIQuotaHUD config/history cleanly if upgrading to AIUsageBar
+            local_app = os.environ.get("LOCALAPPDATA")
+            if local_app:
+                legacy_dir = Path(local_app) / "AIQuotaHUD"
+                new_data_dir = Path(local_app) / "AIUsageBar"
+                if legacy_dir.exists() and legacy_dir.resolve() != new_data_dir.resolve():
+                    new_data_dir.mkdir(parents=True, exist_ok=True)
+                    for fname in ("config.json", "quota_state.json", "quota_history.jsonl"):
+                        src_f = legacy_dir / fname
+                        dst_f = new_data_dir / fname
+                        if src_f.exists() and not dst_f.exists():
+                            try:
+                                shutil.copy2(src_f, dst_f)
+                            except OSError:
+                                pass
+            # Remove legacy AIQuotaHUD startup entry so upgrading users don't get duplicate widgets on reboot
+            appdata = os.environ.get("APPDATA", "")
+            if appdata:
+                legacy_vbs = Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "AIQuotaHUD.vbs"
+                try:
+                    if legacy_vbs.exists():
+                        legacy_vbs.unlink()
+                except OSError:
+                    pass
+
             # Save chosen AI providers and language preference into config.json
             chosen = []
             if self.var_show_agy.get():

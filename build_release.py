@@ -91,13 +91,16 @@ def main() -> int:
     if not wizard_only or not payload_zip.exists() or not icon_path.exists():
         generate_app_icon(icon_path)
 
-        # 1. Compile zero-dependency native .NET hook binary (quota_hook.exe, ~15KB)
+        # 1. Compile zero-dependency native .NET hook binary (quota_hook.exe, ~18KB)
+        #    CRITICAL: Use /target:winexe (GUI subsystem) so invoking quota_hook.exe from
+        #    GUI hosts (Claude Desktop, Antigravity, ConPTY children) NEVER flashes a console
+        #    window while preserving 100% identical stdin/stdout pipe I/O.
         hook_exe = BUILD / "quota_hook.exe"
         run([
             str(CSC_EXE),
             "/nologo",
             "/optimize+",
-            "/target:exe",
+            "/target:winexe",
             "/r:System.Web.Extensions.dll",
             f"/out:{hook_exe}",
             str(ROOT / "hooks" / "QuotaHook.cs"),

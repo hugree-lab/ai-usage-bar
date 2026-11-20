@@ -170,7 +170,7 @@ def _handle_agy(payload: Dict[str, Any], now: float) -> str:
 
 
 def _handle_claude(payload: Dict[str, Any], now: float) -> str:
-    patch: Dict[str, Any] = {"source": "claude_statusline", "updated_at": now}
+    patch: Dict[str, Any] = {"updated_at": now}
     model = payload.get("model")
     if isinstance(model, dict):
         patch["model"] = model.get("display_name") or model.get("id")
@@ -181,6 +181,7 @@ def _handle_claude(payload: Dict[str, Any], now: float) -> str:
     if isinstance(ctx, dict) and ctx.get("used_percentage") is not None:
         patch["context_used_pct"] = _clamp_pct(ctx.get("used_percentage"))
 
+    has_quota = False
     rl = payload.get("rate_limits")
     if isinstance(rl, dict):
         def _parse_rl(obj: Any) -> Optional[Dict[str, Any]]:
@@ -200,12 +201,19 @@ def _handle_claude(payload: Dict[str, Any], now: float) -> str:
         w = _parse_rl(rl.get("seven_day"))
         if w:
             patch["weekly"] = w
+            has_quota = True
         fb = _parse_rl(rl.get("seven_day_fable"))
         if fb:
             patch["weekly_fable"] = fb
+            has_quota = True
         s5 = _parse_rl(rl.get("five_hour"))
         if s5:
             patch["session_5h"] = s5
+            has_quota = True
+
+    if has_quota:
+        patch["source"] = "claude_statusline"
+        patch["quota_updated_at"] = now
 
     _update_state("claude", patch)
     wk = patch.get("weekly")

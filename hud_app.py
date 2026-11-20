@@ -1393,15 +1393,16 @@ class QuotaHUDApp:
                 lines.append(self._t("tip_pace", label=pace["label"]))
 
         status = self._last_refresh_status.get(prov)
-        if not has_any and status and not status[0]:
-            lines.append(self._t("tip_note", msg=status[1]))
-        elif pdata.get("updated_at"):
-            age = format_relative_age(pdata.get("updated_at"), now, lang=lang)
+        if status and not status[0] and status[1]:
+            lines.append(f"⚠ {status[1]}")
+        q_ts = pdata.get("quota_updated_at") or pdata.get("updated_at")
+        if q_ts:
+            age = format_relative_age(q_ts, now, lang=lang)
             if self._compact_style() == "slim":
                 lines.append(self._t("tip_updated_slim", age=age))
             else:
                 lines.append(self._t("tip_updated_dbl", age=age))
-        else:
+        elif not (status and not status[0]):
             lines.append(self._t("tip_click_refresh"))
 
         return "\n".join(lines)
@@ -2329,10 +2330,11 @@ class QuotaHUDApp:
             "claude", cld_wk, cld_5h, cld_badge, cld_empty, now, mode, n_enabled
         )
 
-        cld_age = format_relative_age(cld_data.get("updated_at"), now, lang=lang)
+        cld_qts = cld_data.get("quota_updated_at") or cld_data.get("updated_at")
+        cld_age = format_relative_age(cld_qts, now, lang=lang)
         cld_src = self._t("src_cld_auto") if cld_data.get("source") == "claude_usage_auto" else self._t("src_cld_hook")
         self._cld_meta.configure(
-            text=f"{cld_src} · {cld_age}" if cld_data.get("updated_at") else self._t("waiting_conn")
+            text=f"{cld_src} · {cld_age}" if cld_qts else self._t("waiting_conn")
         )
         self._update_metric_slot(
             self._cld_slots["weekly_gen"], cld_wk, now, mode,
@@ -2349,8 +2351,12 @@ class QuotaHUDApp:
             empty_hint=self._t("waiting"), window_sec=SESSION_5H_WINDOW_SEC,
         )
 
+        cld_status = self._last_refresh_status.get("claude")
+        cld_err = bool(cld_status and not cld_status[0] and cld_status[1])
         cld_foot_parts = []
-        if p_c is None:
+        if cld_err:
+            cld_foot_parts.append(f"⚠ {cld_status[1]}")
+        elif p_c is None:
             cld_foot_parts.append(self._diagnostic_hint("claude", self._t("hint_cld")))
         else:
             if cld_data.get("model"):
@@ -2363,7 +2369,10 @@ class QuotaHUDApp:
                 cld_foot_parts.append(cld_pace["short"])
             if not cld_foot_parts:
                 cld_foot_parts.append(self._t("hint_cld_sync"))
-        self._cld_footer.configure(text=truncate_text(" · ".join(cld_foot_parts), 40))
+        self._cld_footer.configure(
+            text=truncate_text(" · ".join(cld_foot_parts), 42),
+            fg=pal["warn"] if cld_err else pal["text_muted"],
+        )
 
         # ---------------- Codex ----------------
         cdx_data = self.state.get("codex") if isinstance(self.state.get("codex"), dict) else {}

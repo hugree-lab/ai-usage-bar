@@ -155,11 +155,16 @@ namespace AIUsageBarHook
                 }
             }
 
+            bool hasQuota = (weekly != null || weeklyFable != null || session5h != null || extraBuckets.Count > 0);
             var patch = new Dictionary<string, object>
             {
-                { "source", "claude_code_statusline" },
                 { "updated_at", now }
             };
+            if (hasQuota)
+            {
+                patch["source"] = "claude_code_statusline";
+                patch["quota_updated_at"] = now;
+            }
             if (!string.IsNullOrEmpty(modelName))
                 patch["model"] = modelName;
             if (ctxUsed.HasValue)

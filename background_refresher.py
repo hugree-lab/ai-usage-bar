@@ -39,7 +39,9 @@ else:
 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 CREATE_SUSPENDED = 0x00000004
+STARTF_USESHOWWINDOW = 0x00000001
 STARTF_USESTDHANDLES = 0x00000100
+SW_HIDE = 0
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 
@@ -444,7 +446,10 @@ def _spawn_conpty(
 
     si = _STARTUPINFOEXW()
     si.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
-    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+    # CRITICAL on Windows 11 GUI apps: set STARTF_USESHOWWINDOW + SW_HIDE so
+    # CreatePseudoConsole / conhost never flashes a visible terminal window.
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
+    si.StartupInfo.wShowWindow = SW_HIDE
     si.lpAttributeList = ctypes.addressof(attr_buf)
     pi = _PROCESS_INFORMATION()
 
@@ -621,16 +626,20 @@ def _find_trusted_claude_cwd() -> Optional[str]:
     if not isinstance(projects, dict):
         return None
 
-    # Claude Code v2.1+ stores normalized forward-slash paths; prefer those first
+    # Claude Code v2.1+ stores normalized forward-slash paths; prefer normal user dirs over Windows system dirs
     fwd_candidates: List[str] = []
     other_candidates: List[str] = []
+    sys_fallback: List[str] = []
     for k, v in projects.items():
         if not isinstance(v, dict) or not v.get("hasTrustDialogAccepted"):
             continue
         p = Path(k)
         if not p.exists() or not p.is_dir():
             continue
-        if "/" in k:
+        low_p = str(p).lower().replace("/", "\\")
+        if low_p.startswith(("c:\\windows", "c:\\program files")):
+            sys_fallback.append(str(p))
+        elif "/" in k:
             fwd_candidates.append(str(p))
         else:
             other_candidates.append(str(p))
@@ -639,6 +648,8 @@ def _find_trusted_claude_cwd() -> Optional[str]:
         return fwd_candidates[0]
     if other_candidates:
         return other_candidates[0]
+    if sys_fallback:
+        return sys_fallback[0]
     return None
 
 
@@ -757,10 +768,47 @@ def parse_claude_usage_screen(screen_text: str, now: Optional[float] = None) -> 
     return cleaned
 
 
+def _check_claude_auth_status(claude_exe: str) -> Optional[bool]:
+    """Fast 0.2s zero-ConPTY check via official `claude auth status`.
+
+    Returns:
+      False -> definitively logged out or non-subscription API key only (skip ConPTY)
+      True  -> logged in
+      None  -> indeterminate (older CLI without `auth status`, fall through to /usage)
+    """
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+    try:
+        proc = subprocess.run(
+            [claude_exe, "auth", "status"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
+            timeout=5.0,
+        )
+        raw = (proc.stdout or "").strip()
+        if raw.startswith("{"):
+            info = json.loads(raw)
+            if isinstance(info, dict) and "loggedIn" in info:
+                if not info.get("loggedIn"):
+                    return False
+                if str(info.get("authMethod") or "").lower() in ("apikey", "api_key", "none"):
+                    return False
+                return True
+    except Exception:
+        pass
+    return None
+
+
 def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool, str]:
     claude_exe = find_claude_cli()
     if not claude_exe:
         return False, tr(lang, "ref_cld_missing")
+
+    # Fast zero-ConPTY auth check: avoids wasting 13s or spawning ConPTY when logged out
+    if _check_claude_auth_status(claude_exe) is False:
+        return False, tr(lang, "ref_cld_login")
 
     cwd = _find_trusted_claude_cwd()
     if not cwd:
@@ -779,6 +827,8 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
         txt = scr.text()
         low = txt.lower()
         if "folder isn't trusted" in low or "quick safety check" in low:
+            return True
+        if "api usage billing" in low or "not logged in" in low:
             return True
 
         if state_flags["ready_at"] is None:
@@ -799,6 +849,8 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
                 send(b"\r")
 
             if state_flags["sent_enter1"]:
+                if "estimated cost:" in low and "current week" not in low:
+                    return True
                 if "refreshing usage" in low:
                     state_flags["saw_refreshing"] = True
                 has_data = ("current session" in low and "current week" in low and "% used" in low)
@@ -824,13 +876,25 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
         low = screen_text.lower()
         if "folder isn't trusted" in low or "quick safety check" in low:
             return False, tr(lang, "ref_cld_trust_once")
-        if any(k in low for k in ("not logged in", "credit balance", "sign in", "api key", "login method")):
+        if any(
+            k in low
+            for k in (
+                "api usage billing",
+                "estimated cost:",
+                "not logged in",
+                "credit balance",
+                "sign in",
+                "api key",
+                "login method",
+            )
+        ):
             return False, tr(lang, "ref_cld_login")
         return False, tr(lang, "ref_cld_timeout")
 
     patch: Dict[str, Any] = {
         "source": "claude_usage_auto",
         "updated_at": now,
+        "quota_updated_at": now,
     }
     patch.update(parsed)
     update_provider_state("claude", patch)
@@ -970,7 +1034,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
     try:
         assert proc.stdin is not None
         reqs = [
-            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.0"}}},
+            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.1"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 2, "params": {}},
         ]

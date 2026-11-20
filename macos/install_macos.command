@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI Usage Bar v1.8.0 — macOS 1-Click Installer (Apple Silicon & Intel)
+# AI Usage Bar v1.8.1 — macOS 1-Click Installer (Apple Silicon & Intel)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,7 +9,7 @@ APP_DIR="$APP_HOME/app"
 VENV_DIR="$APP_HOME/venv"
 
 echo "============================================"
-echo "  AI Usage Bar v1.8.0 — macOS Installer"
+echo "  AI Usage Bar v1.8.1 — macOS Installer"
 echo "============================================"
 
 if ! command -v python3 >/dev/null 2>&1; then
