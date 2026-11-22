@@ -11,6 +11,7 @@ inside a hidden Windows ConPTY (or POSIX pty on macOS).
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import os
@@ -27,23 +28,28 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from hooks_manager import find_agy_cli, find_claude_cli, find_codex_cli
 from i18n import tr
-from state_store import STATE_PATH, clamp_pct, load_state, parse_timestamp, update_provider_state
+from state_store import DATA_DIR, STATE_PATH, clamp_pct, load_state, parse_timestamp, update_provider_state
 
 if sys.platform == "win32":
     from ctypes import wintypes
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
 else:
     kernel32 = None
+    _user32 = None
 
 PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 CREATE_SUSPENDED = 0x00000004
+CREATE_NO_WINDOW = 0x08000000
 STARTF_USESHOWWINDOW = 0x00000001
 STARTF_USESTDHANDLES = 0x00000100
 SW_HIDE = 0
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+DESKTOP_ALL_ACCESS = 0x000F01FF
+HIDDEN_DESKTOP_NAME = "AIUsageBar_HiddenDesk"
 
 
 if sys.platform == "win32":
@@ -208,6 +214,156 @@ if sys.platform == "win32":
 
     kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+    kernel32.SetHandleInformation.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD]
+    kernel32.SetHandleInformation.restype = wintypes.BOOL
+
+    _user32.CreateDesktopW.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+    ]
+    _user32.CreateDesktopW.restype = wintypes.HANDLE
+
+    _user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+    _user32.CloseDesktop.restype = wintypes.BOOL
+
+
+_hidden_desk_lock = threading.Lock()
+_hidden_desk_handle: Optional[int] = None
+
+
+def _ensure_hidden_desktop() -> Optional[str]:
+    """Create/keep an invisible Win32 Desktop so child & grandchild console processes
+    (cmd.exe, conhost.exe, git.exe, reg.exe, bash.exe) can NEVER flash on the user's screen.
+    """
+    global _hidden_desk_handle
+    if sys.platform != "win32" or _user32 is None:
+        return None
+    with _hidden_desk_lock:
+        if _hidden_desk_handle:
+            return HIDDEN_DESKTOP_NAME
+        try:
+            h = _user32.CreateDesktopW(HIDDEN_DESKTOP_NAME, None, None, 0, DESKTOP_ALL_ACCESS, None)
+            if h:
+                _hidden_desk_handle = int(h)
+                return HIDDEN_DESKTOP_NAME
+        except Exception:
+            pass
+    return None
+
+
+def _close_hidden_desktop() -> None:
+    global _hidden_desk_handle
+    if sys.platform != "win32" or _user32 is None:
+        return
+    with _hidden_desk_lock:
+        if _hidden_desk_handle:
+            try:
+                _user32.CloseDesktop(wintypes.HANDLE(_hidden_desk_handle))
+            except Exception:
+                pass
+            _hidden_desk_handle = None
+
+
+atexit.register(_close_hidden_desktop)
+
+
+def _run_hidden_capture(cmd_line: str, cwd: Optional[str] = None, timeout: float = 5.0) -> Tuple[int, str]:
+    """Run a short CLI command on the isolated hidden Win32 Desktop and capture stdout."""
+    if sys.platform != "win32" or kernel32 is None:
+        proc = subprocess.run(
+            shlex.split(cmd_line),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+        return proc.returncode, proc.stdout or ""
+
+    out_r, out_w = wintypes.HANDLE(), wintypes.HANDLE()
+    sa = _SECURITY_ATTRIBUTES(ctypes.sizeof(_SECURITY_ATTRIBUTES), None, True)
+    if not kernel32.CreatePipe(ctypes.byref(out_r), ctypes.byref(out_w), ctypes.byref(sa), 0):
+        return -1, ""
+    # Prevent child from inheriting the read end so EOF arrives cleanly on exit
+    kernel32.SetHandleInformation(out_r, 0x00000001, 0)
+
+    si = _STARTUPINFOEXW()
+    si.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOW)
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
+    si.StartupInfo.wShowWindow = SW_HIDE
+    si.StartupInfo.hStdOutput = out_w
+    si.StartupInfo.hStdError = out_w
+    hidden_desk = _ensure_hidden_desktop()
+    if hidden_desk:
+        si.StartupInfo.lpDesktop = hidden_desk
+
+    pi = _PROCESS_INFORMATION()
+    hjob = kernel32.CreateJobObjectW(None, None)
+    if hjob:
+        jinfo = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        jinfo.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel32.SetInformationJobObject(
+            hjob, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(jinfo), ctypes.sizeof(jinfo)
+        ):
+            kernel32.CloseHandle(hjob)
+            hjob = None
+
+    cmd_buf = ctypes.create_unicode_buffer(cmd_line)
+    ok = kernel32.CreateProcessW(
+        None, cmd_buf, None, None, True,
+        CREATE_NO_WINDOW | CREATE_SUSPENDED,
+        None, cwd, ctypes.byref(si), ctypes.byref(pi),
+    )
+    kernel32.CloseHandle(out_w)
+    if not ok:
+        if hjob:
+            kernel32.CloseHandle(hjob)
+        kernel32.CloseHandle(out_r)
+        return -1, ""
+
+    if hjob:
+        if not kernel32.AssignProcessToJobObject(hjob, pi.hProcess):
+            kernel32.CloseHandle(hjob)
+            hjob = None
+    kernel32.ResumeThread(pi.hThread)
+
+    chunks: List[bytes] = []
+    deadline = time.time() + timeout
+    exit_code = -1
+    try:
+        while time.time() < deadline:
+            avail = wintypes.DWORD(0)
+            while kernel32.PeekNamedPipe(out_r, None, 0, None, ctypes.byref(avail), None) and avail.value > 0:
+                buf = ctypes.create_string_buffer(min(avail.value, 65536))
+                read = wintypes.DWORD(0)
+                if not kernel32.ReadFile(out_r, buf, len(buf), ctypes.byref(read), None) or read.value == 0:
+                    break
+                chunks.append(buf.raw[: read.value])
+            ec = wintypes.DWORD(0)
+            if kernel32.GetExitCodeProcess(pi.hProcess, ctypes.byref(ec)) and ec.value != 259:
+                exit_code = int(ec.value)
+                # Drain any remaining buffered stdout
+                while kernel32.PeekNamedPipe(out_r, None, 0, None, ctypes.byref(avail), None) and avail.value > 0:
+                    buf = ctypes.create_string_buffer(min(avail.value, 65536))
+                    read = wintypes.DWORD(0)
+                    if not kernel32.ReadFile(out_r, buf, len(buf), ctypes.byref(read), None) or read.value == 0:
+                        break
+                    chunks.append(buf.raw[: read.value])
+                break
+            time.sleep(0.03)
+    finally:
+        if hjob:
+            kernel32.TerminateJobObject(hjob, 0)
+            kernel32.CloseHandle(hjob)
+        kernel32.TerminateProcess(pi.hProcess, 0)
+        kernel32.WaitForSingleObject(pi.hProcess, 400)
+        kernel32.CloseHandle(pi.hThread)
+        kernel32.CloseHandle(pi.hProcess)
+        kernel32.CloseHandle(out_r)
+
+    return exit_code, b"".join(chunks).decode("utf-8", errors="replace")
 
 
 # Minimal VT100 screen grid so Ink TUI cursor-positioned diff redraws merge cleanly
@@ -446,8 +602,14 @@ def _spawn_conpty(
 
     si = _STARTUPINFOEXW()
     si.StartupInfo.cb = ctypes.sizeof(_STARTUPINFOEXW)
-    # CRITICAL on Windows 11 GUI apps: set STARTF_USESHOWWINDOW + SW_HIDE so
-    # CreatePseudoConsole / conhost never flashes a visible terminal window.
+    # CRITICAL on Windows 11 GUI apps:
+    # 1. Assign an isolated invisible Win32 Desktop (`lpDesktop`) so ALL child AND grandchild
+    #    console processes (cmd.exe, conhost.exe, git.exe, reg.exe, bash.exe, node.exe) are
+    #    kernel-isolated from the user's interactive Desktop and can NEVER flash on screen.
+    # 2. Also set STARTF_USESHOWWINDOW + SW_HIDE as a secondary fallback.
+    hidden_desk = _ensure_hidden_desktop()
+    if hidden_desk:
+        si.StartupInfo.lpDesktop = hidden_desk
     si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW
     si.StartupInfo.wShowWindow = SW_HIDE
     si.lpAttributeList = ctypes.addressof(attr_buf)
@@ -602,7 +764,7 @@ def refresh_antigravity_silent(timeout: float = 12.0, lang: str = "ko") -> Tuple
     after = load_state()
     after_agy = after.get("antigravity") or {}
     after_qts = float(after_agy.get("quota_updated_at") or 0.0)
-    if after_qts > prev_qts:
+    if after_qts > prev_qts or flags["seen_ts"] > prev_qts:
         return True, tr(lang, "ref_agy_ok")
 
     if scr is not None:
@@ -768,26 +930,39 @@ def parse_claude_usage_screen(screen_text: str, now: Optional[float] = None) -> 
     return cleaned
 
 
+def _ensure_claude_probe_settings() -> Optional[Path]:
+    """Write a minimal settings override file disabling user hooks, plugins, and statusLine
+    during silent `/usage` polling so background refreshes stay lightweight and never fire hooks.
+    """
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        probe_path = DATA_DIR / ".claude_probe_settings.json"
+        payload = json.dumps(
+            {
+                "disableAllHooks": True,
+                "enabledPlugins": {},
+                "statusLine": {"type": "command", "command": ""},
+            },
+            separators=(",", ":"),
+        )
+        if not probe_path.exists() or probe_path.read_text(encoding="utf-8", errors="ignore") != payload:
+            probe_path.write_text(payload, encoding="utf-8")
+        return probe_path
+    except Exception:
+        return None
+
+
 def _check_claude_auth_status(claude_exe: str) -> Optional[bool]:
-    """Fast 0.2s zero-ConPTY check via official `claude auth status`.
+    """Fast 0.2s zero-ConPTY check via official `claude auth status` on hidden desktop.
 
     Returns:
       False -> definitively logged out or non-subscription API key only (skip ConPTY)
       True  -> logged in
       None  -> indeterminate (older CLI without `auth status`, fall through to /usage)
     """
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
     try:
-        proc = subprocess.run(
-            [claude_exe, "auth", "status"],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=creationflags,
-            timeout=5.0,
-        )
-        raw = (proc.stdout or "").strip()
+        _rc, raw_out = _run_hidden_capture(f'"{claude_exe}" auth status', timeout=5.0)
+        raw = (raw_out or "").strip()
         if raw.startswith("{"):
             info = json.loads(raw)
             if isinstance(info, dict) and "loggedIn" in info:
@@ -814,58 +989,72 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
     if not cwd:
         return False, tr(lang, "ref_cld_trust")
 
-    state_flags: Dict[str, Any] = {
-        "ready_at": None,
-        "sent_cmd": False,
-        "sent_enter1": False,
-        "sent_enter2": False,
-        "saw_refreshing": False,
-        "finished_at": None,
-    }
+    def _run_usage_probe(cmd_line: str) -> _VTScreen:
+        state_flags: Dict[str, Any] = {
+            "ready_at": None,
+            "sent_cmd": False,
+            "sent_enter1": False,
+            "sent_enter2": False,
+            "saw_refreshing": False,
+            "finished_at": None,
+        }
 
-    def _on_tick(scr: _VTScreen, elapsed: float, send: Callable[[bytes], None]) -> bool:
-        txt = scr.text()
-        low = txt.lower()
-        if "folder isn't trusted" in low or "quick safety check" in low:
-            return True
-        if "api usage billing" in low or "not logged in" in low:
-            return True
+        def _on_tick(scr: _VTScreen, elapsed: float, send: Callable[[bytes], None]) -> bool:
+            txt = scr.text()
+            low = txt.lower()
+            if "unknown option" in low or "folder isn't trusted" in low or "quick safety check" in low:
+                return True
+            if "api usage billing" in low or "not logged in" in low:
+                return True
 
-        if state_flags["ready_at"] is None:
-            if "❯" in txt or "claude code" in low or elapsed >= 4.0:
-                state_flags["ready_at"] = elapsed
+            if state_flags["ready_at"] is None:
+                if "❯" in txt or "claude code" in low or elapsed >= 4.0:
+                    state_flags["ready_at"] = elapsed
 
-        ra = state_flags["ready_at"]
-        if ra is not None:
-            since = elapsed - ra
-            if not state_flags["sent_cmd"] and since >= 0.7:
-                state_flags["sent_cmd"] = True
-                send(b"/usage")
-            if state_flags["sent_cmd"] and not state_flags["sent_enter1"] and since >= 1.3:
-                state_flags["sent_enter1"] = True
-                send(b"\r")
-            if state_flags["sent_enter1"] and not state_flags["sent_enter2"] and since >= 2.0:
-                state_flags["sent_enter2"] = True
-                send(b"\r")
+            ra = state_flags["ready_at"]
+            if ra is not None:
+                since = elapsed - ra
+                if not state_flags["sent_cmd"] and since >= 0.7:
+                    state_flags["sent_cmd"] = True
+                    send(b"/usage")
+                if state_flags["sent_cmd"] and not state_flags["sent_enter1"] and since >= 1.3:
+                    state_flags["sent_enter1"] = True
+                    send(b"\r")
+                if state_flags["sent_enter1"] and not state_flags["sent_enter2"] and since >= 2.0:
+                    state_flags["sent_enter2"] = True
+                    send(b"\r")
 
-            if state_flags["sent_enter1"]:
-                if "estimated cost:" in low and "current week" not in low:
-                    return True
-                if "refreshing usage" in low:
-                    state_flags["saw_refreshing"] = True
-                has_data = ("current session" in low and "current week" in low and "% used" in low)
-                still_refreshing = "refreshing usage" in low
-                # Wait until server refresh settles (or 3.2s after Enter2 if it never showed refreshing)
-                if has_data and not still_refreshing and (state_flags["saw_refreshing"] or since >= 5.2):
-                    if state_flags["finished_at"] is None:
-                        state_flags["finished_at"] = elapsed
-                    elif elapsed - state_flags["finished_at"] >= 0.6:
+                if state_flags["sent_enter1"]:
+                    if "estimated cost:" in low and "current week" not in low:
                         return True
-        return False
+                    if "refreshing usage" in low:
+                        state_flags["saw_refreshing"] = True
+                    has_data = ("current session" in low and "current week" in low and "% used" in low)
+                    still_refreshing = "refreshing usage" in low
+                    if has_data and not still_refreshing and (state_flags["saw_refreshing"] or since >= 5.2):
+                        if state_flags["finished_at"] is None:
+                            state_flags["finished_at"] = elapsed
+                        elif elapsed - state_flags["finished_at"] >= 0.6:
+                            return True
+            return False
+
+        return _spawn_conpty(cmd_line, cwd, 120, 45, timeout, _on_tick)
+
+    probe_cfg = _ensure_claude_probe_settings()
+    if probe_cfg is not None:
+        primary_cmd = (
+            f'"{claude_exe}" --strict-mcp-config --setting-sources "" '
+            f'--settings "{probe_cfg}"'
+        )
+    else:
+        primary_cmd = f'"{claude_exe}" --strict-mcp-config'
 
     try:
-        # `--strict-mcp-config` skips user MCP servers for faster, cleaner `/usage` polling
-        scr = _spawn_conpty(f'"{claude_exe}" --strict-mcp-config', cwd, 120, 45, timeout, _on_tick)
+        scr = _run_usage_probe(primary_cmd)
+        # Backwards-compatible fallback for older Claude Code versions without new flags
+        low_out = scr.text().lower()
+        if "unknown option" in low_out or "only works with" in low_out:
+            scr = _run_usage_probe(f'"{claude_exe}" --strict-mcp-config')
     except Exception as exc:
         return False, tr(lang, "ref_cld_err", exc=exc)
 
@@ -1001,7 +1190,12 @@ def read_latest_codex_session_limits(now: Optional[float] = None) -> Optional[Di
 
 
 def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Dict[str, Any]]:
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if sys.platform == "win32" else 0
+    startupinfo = None
+    if sys.platform == "win32":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
     if codex_exe.lower().endswith((".cmd", ".bat")):
         cmd = ["cmd.exe", "/c", codex_exe, "app-server"]
     else:
@@ -1016,6 +1210,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
         encoding="utf-8",
         errors="replace",
         creationflags=creationflags,
+        startupinfo=startupinfo,
     )
     line_q: queue.Queue[Optional[str]] = queue.Queue()
 
@@ -1034,7 +1229,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
     try:
         assert proc.stdin is not None
         reqs = [
-            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.1"}}},
+            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.2"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 2, "params": {}},
         ]
