@@ -1650,6 +1650,14 @@ class QuotaHUDApp:
                     return
         except queue.Empty:
             pass
+        # Allow a second launch (e.g. clicking AIUsageBar.app again) to wake/focus this instance
+        show_trig = DATA_DIR / ".show_trigger"
+        if show_trig.exists():
+            try:
+                show_trig.unlink()
+            except OSError:
+                pass
+            self._show_from_tray()
         self.root.after(100, self._process_actions)
 
     def _hide_to_tray(self) -> None:
@@ -2509,6 +2517,12 @@ def main() -> int:
     enable_dpi_awareness()
     mutex = acquire_single_instance_mutex()
     if mutex is None:
+        # Signal the already-running instance to surface itself
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            (DATA_DIR / ".show_trigger").write_text("show", encoding="utf-8")
+        except OSError:
+            pass
         return 0
     cleanup_stale_temp_files()
     try:

@@ -37,7 +37,7 @@ def _to_shell_safe_path(path: Path) -> str:
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 AGY_SETTINGS = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 UNINSTALL_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AIUsageBar"
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 
 
 def find_codex_cli() -> Optional[str]:
@@ -101,8 +101,30 @@ def find_claude_cli() -> Optional[str]:
         candidates.extend(
             (Path(local_app) / "Microsoft" / "WinGet" / "Packages").glob("Anthropic.ClaudeCode*\\claude.exe")
         )
+    # Claude Desktop bundled Claude Code CLI (macOS & Windows) — newest version first
+    desktop_bases = []
+    if sys.platform == "darwin":
+        desktop_bases.append(Path.home() / "Library" / "Application Support" / "Claude" / "claude-code")
+    elif sys.platform == "win32" and appdata:
+        desktop_bases.append(Path(appdata) / "Claude" / "claude-code")
+    ext_bin = "claude.exe" if sys.platform == "win32" else "claude"
+    bundled_hits = []
+    for base in desktop_bases:
+        if base.exists():
+            bundled_hits.extend(base.glob(f"*/*/claude.app/Contents/MacOS/{ext_bin}"))
+            bundled_hits.extend(base.glob(f"*/claude.app/Contents/MacOS/{ext_bin}"))
+            bundled_hits.extend(base.glob(f"*/*/{ext_bin}"))
+            bundled_hits.extend(base.glob(f"*/{ext_bin}"))
+    # IDE extensions (VS Code / Cursor / Antigravity) bundled Claude Code CLI
+    for ide_dir in (".vscode", ".cursor", ".antigravity"):
+        ext_root = Path.home() / ide_dir / "extensions"
+        if ext_root.exists():
+            bundled_hits.extend(ext_root.glob(f"anthropic.claude-code-*/resources/native-binary/{ext_bin}"))
+    bundled_hits = [p for p in bundled_hits if p.is_file()]
+    bundled_hits.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates.extend(bundled_hits)
     for c in candidates:
-        if c.exists():
+        if c.exists() and c.is_file():
             return str(c)
     return None
 

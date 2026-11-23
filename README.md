@@ -111,7 +111,7 @@ python3 macos/build_macos.py
 ```
 
 ### Automated Releases (GitHub Actions)
-Pushing a version tag (e.g. `git tag v1.8.3 && git push origin v1.8.3`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
+Pushing a version tag (e.g. `git tag v1.8.4 && git push origin v1.8.4`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
 
 ---
 

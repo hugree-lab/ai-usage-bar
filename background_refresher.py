@@ -286,6 +286,7 @@ def _posix_env() -> Dict[str, str]:
             parts.append(d)
     env["PATH"] = os.pathsep.join(parts)
     env.setdefault("TERM", "xterm-256color")
+    env.setdefault("LANG", "en_US.UTF-8")
     return env
 
 
@@ -869,34 +870,40 @@ _MONTHS = {
 
 
 def parse_claude_reset_string(text: str, now_dt: Optional[datetime] = None) -> Optional[float]:
-    """Parse strings like 'Resets 7:10pm (Asia/Seoul)' or 'Resets Nov 19, 3am (Asia/Seoul)'."""
+    """Parse strings like 'Resets 7:10pm (Asia/Seoul)', 'Resets Nov 19, 3am (Asia/Seoul)',
+    or 'Resets Nov 26 at 2:59am (Asia/Seoul)'.
+    """
     if now_dt is None:
         now_dt = datetime.now()
     s = text.strip()
 
-    # Format 1: "Nov 19, 3am" or "Nov 19, 3:30pm"
+    # Format 1: "Nov 19, 3am", "Nov 19, 3:30pm", "Nov 26 at 2:59am", "Nov 26, 2026 at 3am"
     m = re.search(
-        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})"
+        r"(?:,?\s+(\d{4}))?"
+        r"(?:\s*,|\s+at)?\s+"
+        r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b",
         s,
         re.IGNORECASE,
     )
     if m:
         mon = _MONTHS[m.group(1)[:3].lower()]
         day = int(m.group(2))
-        hr = int(m.group(3))
-        mn = int(m.group(4) or 0)
-        ampm = m.group(5).lower()
+        explicit_year = int(m.group(3)) if m.group(3) else None
+        hr = int(m.group(4))
+        mn = int(m.group(5) or 0)
+        ampm = m.group(6).lower()
         if ampm == "pm" and hr != 12:
             hr += 12
         elif ampm == "am" and hr == 12:
             hr = 0
-        year = now_dt.year
+        year = explicit_year if explicit_year is not None else now_dt.year
         try:
             dt = datetime(year, mon, day, hr, mn)
         except ValueError:
             return None
-        # Handle Dec -> Jan year rollover
-        if (dt - now_dt).total_seconds() < -30 * 86400:
+        # Handle Dec -> Jan year rollover when year is omitted
+        if explicit_year is None and (dt - now_dt).total_seconds() < -30 * 86400:
             try:
                 dt = datetime(year + 1, mon, day, hr, mn)
             except ValueError:
@@ -1051,7 +1058,7 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
             low = txt.lower()
             if "unknown option" in low or "folder isn't trusted" in low or "quick safety check" in low:
                 return True
-            if "api usage billing" in low or "not logged in" in low:
+            if "api usage billing" in low or "not logged in" in low or "choose the text style" in low:
                 return True
 
             if state_flags["ready_at"] is None:
@@ -1072,12 +1079,20 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
                     send(b"\r")
 
                 if state_flags["sent_enter1"]:
-                    if "estimated cost:" in low and "current week" not in low:
-                        return True
                     if "refreshing usage" in low:
                         state_flags["saw_refreshing"] = True
                     has_data = ("current session" in low and "current week" in low and "% used" in low)
                     still_refreshing = "refreshing usage" in low
+                    # Claude Code v2.1.330+ renders "Session / Estimated cost" ABOVE "Current session/week",
+                    # so only treat it as API-only billing if no quota sections appear after waiting.
+                    if (
+                        "estimated cost:" in low
+                        and "current week" not in low
+                        and "current session" not in low
+                        and not still_refreshing
+                        and since >= 6.0
+                    ):
+                        return True
                     if has_data and not still_refreshing and (state_flags["saw_refreshing"] or since >= 5.2):
                         if state_flags["finished_at"] is None:
                             state_flags["finished_at"] = elapsed
@@ -1116,14 +1131,15 @@ def refresh_claude_silent(timeout: float = 13.0, lang: str = "ko") -> Tuple[bool
             k in low
             for k in (
                 "api usage billing",
-                "estimated cost:",
                 "not logged in",
                 "credit balance",
                 "sign in",
                 "api key",
                 "login method",
+                "choose the text style",
+                "let's get started",
             )
-        ):
+        ) or ("estimated cost:" in low and "current week" not in low and "current session" not in low):
             return False, tr(lang, "ref_cld_login")
         return False, tr(lang, "ref_cld_timeout")
 
@@ -1277,7 +1293,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
     try:
         assert proc.stdin is not None
         reqs = [
-            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.3"}}},
+            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.4"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 2, "params": {}},
         ]

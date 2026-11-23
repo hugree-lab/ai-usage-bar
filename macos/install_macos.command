@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI Usage Bar v1.8.3 — macOS 1-Click Installer (Apple Silicon & Intel)
+# AI Usage Bar v1.8.4 — macOS 1-Click Installer (Apple Silicon & Intel)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -9,8 +9,15 @@ APP_DIR="$APP_HOME/app"
 VENV_DIR="$APP_HOME/venv"
 LAUNCH_LOG="$APP_HOME/hud_launch.log"
 
+if [ -w "/Applications" ]; then
+  APP_BUNDLE="/Applications/AIUsageBar.app"
+else
+  mkdir -p "$HOME/Applications"
+  APP_BUNDLE="$HOME/Applications/AIUsageBar.app"
+fi
+
 echo "============================================"
-echo "  AI Usage Bar v1.8.3 — macOS Installer"
+echo "  AI Usage Bar v1.8.4 — macOS Installer"
 echo "============================================"
 
 # Prefer a modern Python 3 with Tk >= 8.6 (Homebrew, python.org, or uv) before system Python 3.9 (Tk 8.5)
@@ -67,6 +74,7 @@ echo "Using: $PY_BIN ($PY_INFO)"
 
 # Stop any previously running AI Usage Bar instance so upgrades start cleanly
 pkill -f "$APP_DIR/hud_app.py" >/dev/null 2>&1 || true
+pkill -f "AIUsageBar.app/Contents/MacOS/AIUsageBar" >/dev/null 2>&1 || true
 sleep 0.4
 
 echo "[1/5] Copying app files to: $APP_DIR"
@@ -84,7 +92,6 @@ NEED_VENV=0
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   NEED_VENV=1
 else
-  # Rebuild venv if it was using old Tk 8.5 while a newer Tk >= 8.6 Python is available
   VENV_TK_OK=$("$VENV_DIR/bin/python" -c "import tkinter; print(1 if tkinter.TkVersion >= 8.6 else 0)" 2>/dev/null || echo 0)
   SEL_TK_OK=$("$PY_BIN" -c "import tkinter; print(1 if tkinter.TkVersion >= 8.6 else 0)" 2>/dev/null || echo 0)
   if [ "$VENV_TK_OK" = "0" ] && [ "$SEL_TK_OK" = "1" ]; then
@@ -110,28 +117,59 @@ for name, fn in (("Claude", install_claude_hook), ("Antigravity", install_agy_ho
     print(f"  [{name}] {'OK' if ok else 'Note'}: {msg}")
 PY
 
-echo "[4/5] Creating Desktop launcher..."
-LAUNCHER="$HOME/Desktop/AI Usage Bar.command"
-cat > "$LAUNCHER" <<EOF
+echo "[4/5] Installing native macOS app bundle: $APP_BUNDLE"
+rm -rf "$APP_BUNDLE"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+
+"$VENV_DIR/bin/python" - <<PY
+import sys
+from pathlib import Path
+sys.path.insert(0, "$SCRIPT_DIR")
+from build_macos import generate_macos_icns
+generate_macos_icns(Path("$APP_BUNDLE/Contents/Resources/AppIcon.icns"))
+PY
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>AI Usage Bar</string>
+    <key>CFBundleDisplayName</key><string>AI Usage Bar</string>
+    <key>CFBundleIdentifier</key><string>com.hugreelab.aiusagebar</string>
+    <key>CFBundleVersion</key><string>1.8.4</string>
+    <key>CFBundleShortVersionString</key><string>1.8.4</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleExecutable</key><string>AIUsageBar</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+EOF
+
+cat > "$APP_BUNDLE/Contents/MacOS/AIUsageBar" <<EOF
 #!/usr/bin/env bash
 export PATH="\$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:\$PATH"
-nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >"$LAUNCH_LOG" 2>&1 &
+exec "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >"$LAUNCH_LOG" 2>&1
 EOF
-chmod +x "$LAUNCHER"
+chmod +x "$APP_BUNDLE/Contents/MacOS/AIUsageBar"
+xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
 
-echo "[5/5] Launching AI Usage Bar..."
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >"$LAUNCH_LOG" 2>&1 &
-LAUNCH_PID=$!
-sleep 1.0
-if kill -0 "$LAUNCH_PID" >/dev/null 2>&1; then
+# Clean up legacy Desktop .command launcher if present
+rm -f "$HOME/Desktop/AI Usage Bar.command" >/dev/null 2>&1 || true
+
+echo "[5/5] Launching AI Usage Bar via LaunchServices..."
+open -a "$APP_BUNDLE"
+sleep 1.2
+if pgrep -f "$APP_DIR/hud_app.py" >/dev/null 2>&1; then
+  HUD_PID=$(pgrep -f "$APP_DIR/hud_app.py" | head -n 1)
   echo ""
-  echo "Installation complete! AI Usage Bar is running (PID $LAUNCH_PID)."
-  echo "Launch anytime via Desktop 'AI Usage Bar.command'."
+  echo "Installation complete! AI Usage Bar is running (PID $HUD_PID)."
+  echo "Installed app: $APP_BUNDLE (open anytime from Applications or Spotlight)."
   echo "(Enable Launch at Login in Settings ⚙ -> Alerts & Key.)"
 else
   echo ""
-  echo "[Warning] AI Usage Bar exited right after launch. Log output ($LAUNCH_LOG):"
+  echo "[Warning] AI Usage Bar did not stay running. Log output ($LAUNCH_LOG):"
   cat "$LAUNCH_LOG" 2>/dev/null || true
   exit 1
 fi
