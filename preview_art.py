@@ -6,9 +6,21 @@ from __future__ import annotations
 
 import io
 import math
+import tkinter as tk
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image, ImageDraw
+
+
+def png_bytes_to_photoimage(png_bytes: bytes, master: Optional[tk.Misc] = None) -> Any:
+    """Create a Tk-compatible PhotoImage from PNG bytes on both Tk 8.6+/9.0 and macOS Tk 8.5."""
+    try:
+        return tk.PhotoImage(data=png_bytes, master=master)
+    except tk.TclError:
+        from PIL import ImageTk
+
+        img = Image.open(io.BytesIO(png_bytes))
+        return ImageTk.PhotoImage(img, master=master)
 
 STYLE_INFO: Dict[str, Tuple[str, str, str]] = {
     "dual": (

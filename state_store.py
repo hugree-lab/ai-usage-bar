@@ -633,13 +633,25 @@ def is_startup_enabled() -> bool:
 
 def set_startup_enabled(enabled: bool, target_exe: Optional[Path] = None) -> bool:
     if sys.platform == "darwin":
+        from xml.sax.saxutils import escape as _xml_esc
+
         plist = _macos_launch_agent_path()
         if not enabled:
             if plist.exists():
                 plist.unlink()
             return False
         plist.parent.mkdir(parents=True, exist_ok=True)
-        run_script = target_exe or (BASE_DIR / "macos" / "run_macos.py")
+        if getattr(sys, "frozen", False):
+            exe_path = Path(target_exe) if target_exe is not None else Path(sys.executable)
+            prog_args = [str(exe_path.resolve())]
+            work_dir = str(exe_path.resolve().parent)
+        else:
+            run_script = Path(target_exe) if target_exe is not None else (BASE_DIR / "hud_app.py")
+            # Preserve venv symlink path (do NOT .resolve() sys.executable, or venv site-packages are lost!)
+            prog_args = [os.path.abspath(sys.executable), str(run_script.resolve())]
+            work_dir = str(run_script.resolve().parent)
+        args_xml = "\n".join(f"        <string>{_xml_esc(a)}</string>" for a in prog_args)
+        default_path = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         plist_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -647,9 +659,13 @@ def set_startup_enabled(enabled: bool, target_exe: Optional[Path] = None) -> boo
     <key>Label</key><string>com.hugreelab.aiusagebar</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{sys.executable}</string>
-        <string>{run_script}</string>
+{args_xml}
     </array>
+    <key>WorkingDirectory</key><string>{_xml_esc(work_dir)}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>{_xml_esc(default_path)}</string>
+    </dict>
     <key>RunAtLoad</key><true/>
 </dict>
 </plist>

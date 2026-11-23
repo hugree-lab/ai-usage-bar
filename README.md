@@ -65,7 +65,8 @@ flowchart LR
 3. Complete the one-time CLI sign-in below for each provider you want to monitor.
 
 ### macOS (Apple Silicon / Intel)
-- Download **`AIUsageBar-macOS.dmg`** from [Releases](../../releases), or run `./macos/install_macos.command` directly from source.
+- **DMG (Apple Silicon):** Download **`AIUsageBar-macOS.dmg`** from [Releases](../../releases), drag `AIUsageBar.app` into `Applications`, and run `xattr -cr /Applications/AIUsageBar.app` once in Terminal if macOS Gatekeeper blocks the unsigned open-source build.
+- **From Source (Apple Silicon & Intel, no Gatekeeper prompt):** Run `./macos/install_macos.command`.
 - See [`macos/README_macOS.md`](macos/README_macOS.md) for details.
 
 ---
@@ -110,7 +111,7 @@ python3 macos/build_macos.py
 ```
 
 ### Automated Releases (GitHub Actions)
-Pushing a version tag (e.g. `git tag v1.8.2 && git push origin v1.8.2`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
+Pushing a version tag (e.g. `git tag v1.8.3 && git push origin v1.8.3`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
 
 ---
 

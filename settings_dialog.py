@@ -10,6 +10,7 @@ Tabs:
 from __future__ import annotations
 
 import os
+import sys
 import time
 import tkinter as tk
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from hooks_manager import APP_VERSION
 from hotkey_manager import format_tk_key_event
-from preview_art import render_history_chart_png, render_style_preview_png
+from preview_art import png_bytes_to_photoimage, render_history_chart_png, render_style_preview_png
 from state_store import (
     BASE_DIR,
     COMPACT_STYLES,
@@ -31,7 +32,7 @@ from state_store import (
     normalize_enabled_providers,
     save_config,
 )
-from win11_ui import apply_win11_dwm, get_hwnd, get_monitor_work_area_for_point
+from win11_ui import apply_win11_dwm, get_hwnd, get_monitor_work_area_for_point, ui_font
 
 if TYPE_CHECKING:
     from hud_app import QuotaHUDApp
@@ -74,11 +75,11 @@ class SettingsDialog:
             except Exception:
                 pass
 
-        self._f_h2 = ("Malgun Gothic", 9, "bold")
-        self._f_body = ("Malgun Gothic", 8)
-        self._f_small = ("Malgun Gothic", 8)
-        self._f_mono = ("Segoe UI", 8)
-        self._f_kbd = ("Consolas", 9, "bold")
+        self._f_h2 = ui_font("ui", 9, "bold")
+        self._f_body = ui_font("ui", 8)
+        self._f_small = ui_font("ui", 8)
+        self._f_mono = ui_font("num", 8)
+        self._f_kbd = ui_font("mono", 9, "bold")
         self._fixed_w: int = 618
         self._fixed_h: int = 656
 
@@ -217,7 +218,7 @@ class SettingsDialog:
 
         tk.Label(
             top, text="AI Usage Bar", bg=pal["bg_card"], fg=pal["accent_agy"],
-            font=("Segoe UI", 11, "bold"),
+            font=ui_font("num", 11, "bold"),
         ).pack(side="left")
         tk.Label(
             top, text=f" v{APP_VERSION}", bg=pal["bg_card"], fg=pal["text_muted"],
@@ -346,7 +347,7 @@ class SettingsDialog:
             outer_card.grid(row=0, column=col_idx, sticky="nsew", padx=(0, pad_r))
 
             png = render_style_preview_png(st, pal, width=146, height=68)
-            photo = tk.PhotoImage(data=png)
+            photo = png_bytes_to_photoimage(png, master=self.win)
             self._preview_photos[st] = photo
 
             img_lbl = tk.Label(outer_card, image=photo, bg=pal["bg_main"], bd=0, cursor="hand2")
@@ -367,7 +368,7 @@ class SettingsDialog:
                 text=sub,
                 bg=pal["bg_main"],
                 fg=pal["text_muted"],
-                font=("Malgun Gothic", 7),
+                font=ui_font("ui", 7),
                 cursor="hand2",
             )
             s_lbl.pack()
@@ -443,13 +444,13 @@ class SettingsDialog:
 
             handle = tk.Label(
                 row, text="⠿", bg=pal["bg_main"], fg=pal["text_muted"],
-                font=("Segoe UI Symbol", 10), padx=2, cursor="fleur",
+                font=ui_font("sym", 10), padx=2, cursor="fleur",
             )
             handle.pack(side="left", padx=(0, 4))
 
             rank_lbl = tk.Label(
                 row, text="1", bg=pal["bg_btn"], fg=pal["text_sec"],
-                font=("Segoe UI", 8, "bold"), width=2, anchor="center", cursor="fleur",
+                font=ui_font("num", 8, "bold"), width=2, anchor="center", cursor="fleur",
             )
             rank_lbl.pack(side="left", padx=(0, 7))
 
@@ -469,14 +470,14 @@ class SettingsDialog:
 
             btn_dn = tk.Label(
                 row, text="▼", bg=pal["bg_btn"], fg=pal["text_pri"],
-                font=("Segoe UI Symbol", 8), padx=6, pady=1, cursor="hand2",
+                font=ui_font("sym", 8), padx=6, pady=1, cursor="hand2",
             )
             btn_dn.pack(side="right", padx=(3, 0))
             btn_dn.bind("<Button-1>", lambda _e, p=prov: self._step_provider_order(p, 1))
 
             btn_up = tk.Label(
                 row, text="▲", bg=pal["bg_btn"], fg=pal["text_pri"],
-                font=("Segoe UI Symbol", 8), padx=6, pady=1, cursor="hand2",
+                font=ui_font("sym", 8), padx=6, pady=1, cursor="hand2",
             )
             btn_up.pack(side="right", padx=(8, 0))
             btn_up.bind("<Button-1>", lambda _e, p=prov: self._step_provider_order(p, -1))
@@ -729,12 +730,13 @@ class SettingsDialog:
             primary=self._recording_hotkey,
         ).pack(side="right")
 
-        if self._hotkey_status_msg:
+        status_note = self._hotkey_status_msg or (t("hk_macos_note") if sys.platform == "darwin" else "")
+        if status_note:
             tk.Label(
                 c2,
-                text=self._hotkey_status_msg,
+                text=status_note,
                 bg=pal["bg_card"],
-                fg=pal["good"] if self._hotkey_status_ok else pal["low"],
+                fg=pal["text_sec"] if (sys.platform == "darwin" and not self._hotkey_status_msg) else (pal["good"] if self._hotkey_status_ok else pal["low"]),
                 font=self._f_small,
                 anchor="w",
             ).pack(fill="x", pady=(5, 0))
@@ -842,7 +844,7 @@ class SettingsDialog:
                 tk.Label(
                     hdr,
                     text=f"  {disp_wk:.1f}%",
-                    bg=pal["bg_card"], fg=pal["text_pri"], font=("Segoe UI", 9, "bold"),
+                    bg=pal["bg_card"], fg=pal["text_pri"], font=ui_font("num", 9, "bold"),
                 ).pack(side="left")
 
             if pace is not None:
@@ -869,14 +871,14 @@ class SettingsDialog:
                 width=492,
                 height=chart_h,
             )
-            photo = tk.PhotoImage(data=png)
+            photo = png_bytes_to_photoimage(png, master=self.win)
             self._trend_photos[prov] = photo
             tk.Label(card, image=photo, bg=pal["bg_card"], bd=0).pack(fill="x")
 
             n_pts = sum(1 for e in entries if isinstance(e.get(prov), dict))
             age = format_relative_age(pdata.get("updated_at"), now, lang=lang)
             foot_txt = t("trends_points", n=n_pts, age=age) if n_pts >= 2 else t("trends_collecting")
-            tk.Label(card, text=foot_txt, bg=pal["bg_card"], fg=pal["text_muted"], font=("Malgun Gothic", 7), anchor="w").pack(fill="x", pady=(4, 0))
+            tk.Label(card, text=foot_txt, bg=pal["bg_card"], fg=pal["text_muted"], font=ui_font("ui", 7), anchor="w").pack(fill="x", pady=(4, 0))
 
     # ------------------------------------------------------------------ Tab 4: Help Guide
     def _build_help_tab(self, body: tk.Frame, pal: Dict[str, str]) -> None:

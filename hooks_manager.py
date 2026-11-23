@@ -16,7 +16,7 @@ if sys.platform == "win32":
 else:
     winreg = None  # type: ignore[assignment]
 
-from state_store import BASE_DIR, set_startup_enabled
+from state_store import BASE_DIR, DATA_DIR, set_startup_enabled
 
 
 def _to_shell_safe_path(path: Path) -> str:
@@ -37,7 +37,7 @@ def _to_shell_safe_path(path: Path) -> str:
 CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
 AGY_SETTINGS = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
 UNINSTALL_REG_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\AIUsageBar"
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
 
 
 def find_codex_cli() -> Optional[str]:
@@ -50,7 +50,11 @@ def find_codex_cli() -> Optional[str]:
         Path.home() / ".local" / "bin" / "codex",
         Path("/opt/homebrew/bin/codex"),
         Path("/usr/local/bin/codex"),
+        Path.home() / ".npm-global" / "bin" / "codex",
     ]
+    nvm_dir = Path.home() / ".nvm" / "versions" / "node"
+    if nvm_dir.exists():
+        candidates.extend(sorted(nvm_dir.glob("*/bin/codex"), reverse=True))
     appdata = os.environ.get("APPDATA", "")
     local_app = os.environ.get("LOCALAPPDATA", "")
     if appdata:
@@ -84,7 +88,11 @@ def find_claude_cli() -> Optional[str]:
         Path.home() / ".local" / "bin" / "claude",
         Path("/opt/homebrew/bin/claude"),
         Path("/usr/local/bin/claude"),
+        Path.home() / ".npm-global" / "bin" / "claude",
     ]
+    nvm_dir = Path.home() / ".nvm" / "versions" / "node"
+    if nvm_dir.exists():
+        candidates.extend(sorted(nvm_dir.glob("*/bin/claude"), reverse=True))
     appdata = os.environ.get("APPDATA", "")
     local_app = os.environ.get("LOCALAPPDATA", "")
     if appdata:
@@ -147,15 +155,43 @@ def build_hook_command(provider: str, install_dir: Optional[Path] = None) -> str
                 return f"{exe_str} {flag}"
             return f'"{exe_str}" {flag}'
     else:
-        # macOS / POSIX: use zero-dependency Python 3 hook script
-        for cand in (
+        # macOS / POSIX: use zero-dependency Python 3 hook script.
+        # In frozen PyInstaller .app bundles, --add-data lives under sys._MEIPASS;
+        # copy it to a stable location inside DATA_DIR so CLI hooks survive app moves/updates.
+        meipass = getattr(sys, "_MEIPASS", None)
+        candidates = [
             (install_dir / "macos" / "quota_hook.py") if install_dir else None,
             BASE_DIR / "macos" / "quota_hook.py",
             BASE_DIR / "quota_hook.py",
-        ):
+            (Path(meipass) / "macos" / "quota_hook.py") if meipass else None,
+            (Path(meipass) / "quota_hook.py") if meipass else None,
+            (BASE_DIR.parent / "Frameworks" / "macos" / "quota_hook.py"),
+            (BASE_DIR.parent / "Resources" / "macos" / "quota_hook.py"),
+            DATA_DIR / "quota_hook.py",
+        ]
+        found_hook: Optional[Path] = None
+        for cand in candidates:
             if cand is not None and cand.exists():
-                py_bin = shutil.which("python3") or sys.executable
-                return f'"{py_bin}" "{cand.resolve()}" {flag}'
+                found_hook = cand.resolve()
+                break
+        if found_hook is not None:
+            hook_target = found_hook
+            if getattr(sys, "frozen", False) and hook_target != (DATA_DIR / "quota_hook.py"):
+                try:
+                    DATA_DIR.mkdir(parents=True, exist_ok=True)
+                    stable = DATA_DIR / "quota_hook.py"
+                    shutil.copy2(hook_target, stable)
+                    stable.chmod(0o755)
+                    hook_target = stable.resolve()
+                except Exception:
+                    pass
+            py_bin = (
+                shutil.which("python3")
+                or ("/usr/bin/python3" if Path("/usr/bin/python3").exists() else None)
+                or ("/opt/homebrew/bin/python3" if Path("/opt/homebrew/bin/python3").exists() else None)
+                or (sys.executable if not getattr(sys, "frozen", False) else "python3")
+            )
+            return f'"{py_bin}" "{hook_target}" {flag}'
 
     py_exe = _to_shell_safe_path(Path(sys.executable))
     script_name = "claude_statusline.py" if provider == "claude" else "agy_statusline.py"
@@ -188,7 +224,30 @@ def _save_json_with_backup(path: Path, data: dict) -> None:
 
 def _is_managed_command(cmd: str) -> bool:
     low = cmd.lower()
-    return any(tok in low for tok in ("quota_hook.exe", "claude_statusline.py", "agy_statusline.py"))
+    return any(tok in low for tok in ("quota_hook.exe", "quota_hook.py", "claude_statusline.py", "agy_statusline.py"))
+
+
+def ensure_default_hooks_if_unset(install_dir: Optional[Path] = None) -> None:
+    """Connect official statusLine hooks on first run ONLY when not already configured by another tool.
+    Also refreshes stale managed paths (e.g. after upgrading or moving the app on macOS).
+    """
+    for settings_path, install_fn in (
+        (AGY_SETTINGS, install_agy_hook),
+        (CLAUDE_SETTINGS, install_claude_hook),
+    ):
+        try:
+            data = _load_json(settings_path) if settings_path.exists() else {}
+            sl = data.get("statusLine")
+            if not sl:
+                install_fn(install_dir)
+            elif isinstance(sl, dict):
+                cur_cmd = str(sl.get("command", "")).strip()
+                if not cur_cmd or _is_managed_command(cur_cmd):
+                    desired = build_hook_command("claude" if settings_path == CLAUDE_SETTINGS else "antigravity", install_dir)
+                    if cur_cmd != desired:
+                        install_fn(install_dir)
+        except Exception:
+            pass
 
 
 def install_claude_hook(install_dir: Optional[Path] = None) -> Tuple[bool, str]:
@@ -320,6 +379,8 @@ def start_menu_dir() -> Path:
 
 
 def register_uninstall_entry(install_dir: Path) -> None:
+    if sys.platform != "win32" or winreg is None:
+        return
     exe_path = install_dir / "AIUsageBar.exe"
     icon_path = install_dir / "app_icon.ico"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, UNINSTALL_REG_KEY) as key:
@@ -334,6 +395,8 @@ def register_uninstall_entry(install_dir: Path) -> None:
 
 
 def remove_uninstall_entry() -> None:
+    if sys.platform != "win32" or winreg is None:
+        return
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_REG_KEY)
     except OSError:
@@ -341,9 +404,34 @@ def remove_uninstall_entry() -> None:
 
 
 def stop_running_hud_processes() -> None:
-    """Terminate existing AIUsageBar.exe or hud_app.py processes cleanly before install/uninstall."""
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    """Terminate existing AIUsageBar or hud_app.py processes cleanly before install/uninstall."""
     cur_pid = os.getpid()
+    if sys.platform != "win32":
+        import signal
+
+        try:
+            proc = subprocess.run(["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True, timeout=3.0)
+            for ln in proc.stdout.splitlines():
+                parts = ln.strip().split(None, 1)
+                if len(parts) != 2:
+                    continue
+                try:
+                    pid = int(parts[0])
+                except ValueError:
+                    continue
+                cmd = parts[1]
+                if pid == cur_pid:
+                    continue
+                if "hud_app.py" in cmd or "AIUsageBar.app/Contents/MacOS/AIUsageBar" in cmd:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        return
+
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
     ps = (
         f"$cur = {cur_pid}; "
         "Get-CimInstance Win32_Process | Where-Object { "
@@ -368,6 +456,16 @@ def perform_clean_uninstall(install_dir: Path) -> None:
         set_startup_enabled(False)
     except Exception:
         pass
+
+    if sys.platform != "win32":
+        try:
+            launcher = Path.home() / "Desktop" / "AI Usage Bar.command"
+            if launcher.exists():
+                launcher.unlink()
+        except Exception:
+            pass
+        return
+
     try:
         dlnk = desktop_shortcut_path()
         if dlnk.exists():

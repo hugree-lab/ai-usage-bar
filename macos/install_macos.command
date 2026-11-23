@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI Usage Bar v1.8.2 — macOS 1-Click Installer (Apple Silicon & Intel)
+# AI Usage Bar v1.8.3 — macOS 1-Click Installer (Apple Silicon & Intel)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -7,19 +7,71 @@ SRC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 APP_HOME="$HOME/Library/Application Support/AIUsageBar"
 APP_DIR="$APP_HOME/app"
 VENV_DIR="$APP_HOME/venv"
+LAUNCH_LOG="$APP_HOME/hud_launch.log"
 
 echo "============================================"
-echo "  AI Usage Bar v1.8.2 — macOS Installer"
+echo "  AI Usage Bar v1.8.3 — macOS Installer"
 echo "============================================"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "[Error] python3 not found. Install via Homebrew: brew install python python-tk"
+# Prefer a modern Python 3 with Tk >= 8.6 (Homebrew, python.org, or uv) before system Python 3.9 (Tk 8.5)
+select_python() {
+  local candidates=(
+    "/opt/homebrew/bin/python3.13"
+    "/opt/homebrew/bin/python3.12"
+    "/opt/homebrew/bin/python3.11"
+    "/opt/homebrew/bin/python3"
+    "/usr/local/bin/python3.13"
+    "/usr/local/bin/python3.12"
+    "/usr/local/bin/python3.11"
+    "/usr/local/bin/python3"
+  )
+  for p in "$HOME/.local/share/uv/python"/cpython-3.*/bin/python3*; do
+    [ -x "$p" ] && candidates+=("$p")
+  done
+  for p in /Library/Frameworks/Python.framework/Versions/3.*/bin/python3; do
+    [ -x "$p" ] && candidates+=("$p")
+  done
+  if command -v python3 >/dev/null 2>&1; then
+    candidates+=("$(command -v python3)")
+  fi
+
+  local fallback=""
+  for py in "${candidates[@]}"; do
+    [ -x "$py" ] || continue
+    local tk_ver
+    tk_ver=$("$py" -c "import tkinter; print(tkinter.TkVersion)" 2>/dev/null || true)
+    [ -n "$tk_ver" ] || continue
+    if "$py" -c "import tkinter; raise SystemExit(0 if tkinter.TkVersion >= 8.6 else 1)" 2>/dev/null; then
+      echo "$py"
+      return 0
+    fi
+    if [ -z "$fallback" ]; then
+      fallback="$py"
+    fi
+  done
+
+  if [ -n "$fallback" ]; then
+    echo "$fallback"
+    return 0
+  fi
+  return 1
+}
+
+PY_BIN="$(select_python || true)"
+if [ -z "$PY_BIN" ]; then
+  echo "[Error] Python 3 with Tkinter not found. Install via Homebrew: brew install python python-tk"
   exit 1
 fi
+PY_INFO=$("$PY_BIN" -c "import sys, tkinter; print(f'Python {sys.version.split()[0]} / Tk {tkinter.TkVersion}')")
+echo "Using: $PY_BIN ($PY_INFO)"
+
+# Stop any previously running AI Usage Bar instance so upgrades start cleanly
+pkill -f "$APP_DIR/hud_app.py" >/dev/null 2>&1 || true
+sleep 0.4
 
 echo "[1/5] Copying app files to: $APP_DIR"
 mkdir -p "$APP_DIR/macos"
-for f in hud_app.py settings_dialog.py preview_art.py state_store.py i18n.py win11_ui.py win_tray.py hooks_manager.py background_refresher.py hotkey_manager.py; do
+for f in hud_app.py settings_dialog.py preview_art.py state_store.py i18n.py win11_ui.py win_tray.py hooks_manager.py background_refresher.py hotkey_manager.py setup_hooks.py; do
   if [ -f "$SRC_ROOT/$f" ]; then
     cp "$SRC_ROOT/$f" "$APP_DIR/$f"
   fi
@@ -28,8 +80,22 @@ cp "$SCRIPT_DIR/quota_hook.py" "$APP_DIR/macos/quota_hook.py"
 chmod +x "$APP_DIR/macos/quota_hook.py"
 
 echo "[2/5] Preparing virtual environment and Pillow..."
-if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
+NEED_VENV=0
+if [ ! -x "$VENV_DIR/bin/python" ]; then
+  NEED_VENV=1
+else
+  # Rebuild venv if it was using old Tk 8.5 while a newer Tk >= 8.6 Python is available
+  VENV_TK_OK=$("$VENV_DIR/bin/python" -c "import tkinter; print(1 if tkinter.TkVersion >= 8.6 else 0)" 2>/dev/null || echo 0)
+  SEL_TK_OK=$("$PY_BIN" -c "import tkinter; print(1 if tkinter.TkVersion >= 8.6 else 0)" 2>/dev/null || echo 0)
+  if [ "$VENV_TK_OK" = "0" ] && [ "$SEL_TK_OK" = "1" ]; then
+    echo "  Upgrading virtual environment from Tk 8.5 to $PY_INFO..."
+    rm -rf "$VENV_DIR"
+    NEED_VENV=1
+  fi
+fi
+
+if [ "$NEED_VENV" = "1" ]; then
+  "$PY_BIN" -m venv "$VENV_DIR"
 fi
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip pillow
 
@@ -48,12 +114,24 @@ echo "[4/5] Creating Desktop launcher..."
 LAUNCHER="$HOME/Desktop/AI Usage Bar.command"
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
-nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >/dev/null 2>&1 &
+export PATH="\$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:\$PATH"
+nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >"$LAUNCH_LOG" 2>&1 &
 EOF
 chmod +x "$LAUNCHER"
 
 echo "[5/5] Launching AI Usage Bar..."
-nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >/dev/null 2>&1 &
-echo ""
-echo "Installation complete! Launch anytime via Desktop 'AI Usage Bar.command'."
-echo "(Enable Launch at Login in Settings ⚙ -> Alerts & Key.)"
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+nohup "$VENV_DIR/bin/python" "$APP_DIR/hud_app.py" >"$LAUNCH_LOG" 2>&1 &
+LAUNCH_PID=$!
+sleep 1.0
+if kill -0 "$LAUNCH_PID" >/dev/null 2>&1; then
+  echo ""
+  echo "Installation complete! AI Usage Bar is running (PID $LAUNCH_PID)."
+  echo "Launch anytime via Desktop 'AI Usage Bar.command'."
+  echo "(Enable Launch at Login in Settings ⚙ -> Alerts & Key.)"
+else
+  echo ""
+  echo "[Warning] AI Usage Bar exited right after launch. Log output ($LAUNCH_LOG):"
+  cat "$LAUNCH_LOG" 2>/dev/null || true
+  exit 1
+fi

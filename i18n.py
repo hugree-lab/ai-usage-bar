@@ -65,6 +65,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tip_pin_on": "항상 최상위 고정 (켜짐)",
         "tip_pin_off": "항상 최상위 고정 (꺼짐)",
         "tip_hide": "시스템 트레이로 숨기기",
+        "tip_hide_macos": "숨기기 (Dock 아이콘 클릭으로 다시 보이기)",
         "tip_move_up": "표시 순서 위로 이동",
         "tip_move_dn": "표시 순서 아래로 이동",
 
@@ -141,7 +142,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
 
         # Notifications
         "noti_test_title": "AI Usage Bar 알림 테스트",
-        "noti_test_body": "Windows 알림이 정상적으로 동작하고 있습니다.",
+        "noti_test_body": "데스크톱 알림이 정상적으로 동작하고 있습니다.",
         "noti_reset_title": "{label} 한도 초기화",
         "noti_reset_body": "할당량이 리셋되어 다시 사용할 수 있습니다.",
         "noti_reset_new_body": "새 주기 할당량이 초기화되었습니다.",
@@ -184,7 +185,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lbl_opacity": "위젯 투명도",
 
         # Hotkey manager & refresher diagnostics
-        "hk_macos_note": "macOS에서는 앱 내 단축키로 동작합니다.",
+        "hk_macos_note": "macOS: ⌘R(새로고침) · ⌘,(설정) · ⌘H(숨기기) · ⌘Q(종료) · Dock 클릭(복원)",
         "hk_init_err": "단축키 스레드 초기화 실패",
         "hk_disabled": "단축키 꺼짐",
         "hk_invalid": "지원하지 않는 단축키 형식 (예: Ctrl+Alt+Q)",
@@ -380,6 +381,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "tip_pin_on": "Always on top (ON)",
         "tip_pin_off": "Always on top (OFF)",
         "tip_hide": "Hide to system tray",
+        "tip_hide_macos": "Hide widget (click Dock icon to restore)",
         "tip_move_up": "Move up",
         "tip_move_dn": "Move down",
 
@@ -499,7 +501,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "lbl_opacity": "Widget Opacity",
 
         # Hotkey manager & refresher diagnostics
-        "hk_macos_note": "Uses in-app shortcut on macOS.",
+        "hk_macos_note": "macOS: ⌘R (Refresh) · ⌘, (Settings) · ⌘H (Hide) · ⌘Q (Quit) · Click Dock to restore",
         "hk_init_err": "Failed to initialize hotkey thread",
         "hk_disabled": "Hotkey disabled",
         "hk_invalid": "Unsupported shortcut format (e.g. Ctrl+Alt+Q)",

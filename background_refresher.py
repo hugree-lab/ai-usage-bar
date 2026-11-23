@@ -12,6 +12,7 @@ inside a hidden Windows ConPTY (or POSIX pty on macOS).
 from __future__ import annotations
 
 import atexit
+import codecs
 import ctypes
 import json
 import os
@@ -268,12 +269,33 @@ def _close_hidden_desktop() -> None:
 atexit.register(_close_hidden_desktop)
 
 
+def _posix_env() -> Dict[str, str]:
+    """Return environment with common macOS/POSIX CLI bin directories in PATH."""
+    env = dict(os.environ)
+    extra = [
+        str(Path.home() / ".local" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / ".npm-global" / "bin"),
+        str(Path.home() / ".cargo" / "bin"),
+    ]
+    cur_path = env.get("PATH", "")
+    parts = [p for p in cur_path.split(os.pathsep) if p]
+    for d in extra:
+        if d not in parts:
+            parts.append(d)
+    env["PATH"] = os.pathsep.join(parts)
+    env.setdefault("TERM", "xterm-256color")
+    return env
+
+
 def _run_hidden_capture(cmd_line: str, cwd: Optional[str] = None, timeout: float = 5.0) -> Tuple[int, str]:
     """Run a short CLI command on the isolated hidden Win32 Desktop and capture stdout."""
     if sys.platform != "win32" or kernel32 is None:
         proc = subprocess.run(
             shlex.split(cmd_line),
             cwd=cwd,
+            env=_posix_env(),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -492,7 +514,11 @@ def _spawn_posix_pty(
     timeout: float,
     on_tick: Callable[[_VTScreen, float, Callable[[bytes], None]], bool],
 ) -> _VTScreen:
-    """POSIX (macOS / Linux) pseudo-terminal runner using stdlib pty + select."""
+    """POSIX (macOS / Linux) pseudo-terminal runner using pty.openpty + subprocess.Popen.
+
+    Avoids raw pty.fork() inside multi-threaded macOS Cocoa/Tk GUI processes and
+    reaps the child process reliably without leaking zombies.
+    """
     import fcntl
     import pty
     import select
@@ -501,19 +527,35 @@ def _spawn_posix_pty(
     import termios
 
     argv = shlex.split(cmd_line)
-    pid, master_fd = pty.fork()
-    if pid == 0:
-        try:
-            os.chdir(cwd)
-            os.environ.setdefault("TERM", "xterm-256color")
-            os.execvp(argv[0], argv)
-        except Exception:
-            os._exit(127)
-
+    master_fd, slave_fd = pty.openpty()
     try:
-        fcntl.ioctl(master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     except Exception:
         pass
+
+    env = _posix_env()
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        raise
+    finally:
+        try:
+            os.close(slave_fd)
+        except OSError:
+            pass
 
     def send_bytes(data: bytes) -> None:
         try:
@@ -522,6 +564,7 @@ def _spawn_posix_pty(
             pass
 
     screen = _VTScreen(cols=cols, rows=rows)
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     start = time.time()
     try:
         while time.time() - start < timeout:
@@ -535,22 +578,26 @@ def _spawn_posix_pty(
                     break
                 if b"\x1b[6n" in raw_chunk:
                     send_bytes(b"\x1b[1;1R")
-                screen.feed(raw_chunk.decode("utf-8", errors="replace"))
+                decoded = decoder.decode(raw_chunk, final=False)
+                if decoded:
+                    screen.feed(decoded)
             if on_tick(screen, time.time() - start, send_bytes):
                 break
-            wpid, _ = os.waitpid(pid, os.WNOHANG)
-            if wpid == pid:
+            if proc.poll() is not None:
                 break
+        tail = decoder.decode(b"", final=True)
+        if tail:
+            screen.feed(tail)
     finally:
         try:
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except Exception:
             try:
-                os.kill(pid, signal.SIGKILL)
+                proc.kill()
             except Exception:
                 pass
         try:
-            os.waitpid(pid, os.WNOHANG)
+            proc.wait(timeout=2.0)
         except Exception:
             pass
         try:
@@ -1206,6 +1253,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
+        env=None if sys.platform == "win32" else _posix_env(),
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -1229,7 +1277,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
     try:
         assert proc.stdin is not None
         reqs = [
-            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.2"}}},
+            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.3"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 2, "params": {}},
         ]

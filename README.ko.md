@@ -65,7 +65,8 @@ flowchart LR
 3. 아래 안내에 따라 사용하는 CLI에 최초 1회 로그인을 완료합니다.
 
 ### macOS (Apple Silicon / Intel)
-- [Releases](../../releases)에서 **`AIUsageBar-macOS.dmg`**를 다운로드하거나, 소스 폴더의 `./macos/install_macos.command`를 실행하세요.
+- **DMG 설치 (Apple Silicon):** [Releases](../../releases)에서 **`AIUsageBar-macOS.dmg`**를 받아 `AIUsageBar.app`을 `Applications` 폴더로 드래그한 뒤, 미공증 오픈소스 빌드 보안 경고가 뜨면 터미널에서 `xattr -cr /Applications/AIUsageBar.app`을 1회 실행하세요.
+- **소스에서 바로 설치 (Apple Silicon / Intel 공용 · 보안 경고 없음):** `./macos/install_macos.command`를 실행하세요.
 - 자세한 내용은 [`macos/README_macOS.md`](macos/README_macOS.md)를 참고하세요.
 
 ---
@@ -111,7 +112,7 @@ python3 macos/build_macos.py
 ```
 
 ### GitHub Actions 자동 릴리스
-버전 태그(`git tag v1.8.2 && git push origin v1.8.2`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
+버전 태그(`git tag v1.8.3 && git push origin v1.8.3`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
 
 ---
 

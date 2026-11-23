@@ -27,13 +27,14 @@ if str(BASE_DIR_LOCAL) not in sys.path:
 
 from background_refresher import read_latest_codex_session_limits, refresh_all_silent
 from hooks_manager import (
+    ensure_default_hooks_if_unset,
     install_agy_hook,
     install_claude_hook,
     perform_clean_uninstall,
 )
 from hotkey_manager import GlobalHotkeyManager
 from i18n import resolve_lang, tr
-from preview_art import render_dual_ring_png, render_style_preview_png
+from preview_art import png_bytes_to_photoimage, render_dual_ring_png, render_style_preview_png
 from settings_dialog import SettingsDialog
 from state_store import (
     ALL_PROVIDERS,
@@ -69,6 +70,7 @@ from win11_ui import (
     get_monitor_work_area_for_point,
     get_primary_work_area,
     is_windows_dark_mode,
+    ui_font,
 )
 from win_tray import WinTrayIcon
 
@@ -102,7 +104,8 @@ SWP_FRAMECHANGED = 0x0020
 ERROR_ALREADY_EXISTS = 183
 
 # Fixed compact width so the HUD never stretches horizontally
-HUD_WIDTH = 310
+HUD_WIDTH = 338 if sys.platform == "darwin" else 310
+DETAIL_BAR_WIDTH = HUD_WIDTH - 38
 IDLE_PAUSE_SEC = 300.0  # Pause background polling after 5 min of keyboard/mouse inactivity
 REFRESH_INTERVALS = (60, 180, 300, 600)
 THEME_CYCLE = ("auto", "dark", "light")
@@ -504,12 +507,17 @@ class QuotaHUDApp:
         self.root.attributes("-topmost", bool(self.cfg["topmost"]))
         self.root.attributes("-alpha", float(self.cfg["opacity"]))
 
-        self._font_title = ("Malgun Gothic", 9, "bold")
-        self._font_label = ("Malgun Gothic", 8)
-        self._font_pct = ("Segoe UI", 9, "bold")
-        self._font_pct_sm = ("Segoe UI", 8, "bold")
-        self._font_small = ("Malgun Gothic", 8)
-        self._font_mono = ("Segoe UI", 8)
+        if sys.platform != "win32":
+            # Never start permanently hidden when there is no Windows tray icon
+            self.cfg["visible"] = True
+            ensure_default_hooks_if_unset()
+
+        self._font_title = ui_font("ui", 9, "bold")
+        self._font_label = ui_font("ui", 8)
+        self._font_pct = ui_font("num", 9, "bold")
+        self._font_pct_sm = ui_font("num", 8, "bold")
+        self._font_small = ui_font("ui", 8)
+        self._font_mono = ui_font("num", 8)
 
         # Outer container locked strictly to HUD_WIDTH
         self._outer = tk.Frame(self.root, bg=pal["bg_main"], padx=9, pady=7, width=HUD_WIDTH)
@@ -518,6 +526,7 @@ class QuotaHUDApp:
         self._build_compact_section()
         self._build_detail_section()
         self._build_context_menu()
+        self._setup_macos_integration()
         self._bind_tooltips()
 
         self._apply_visibility_layout(resize_window=False)
@@ -723,14 +732,14 @@ class QuotaHUDApp:
         self._notified_milestones.clear()
         self._seed_notification_state(time.time())
 
-    def _get_style_preview_photo(self, style: str) -> tk.PhotoImage:
+    def _get_style_preview_photo(self, style: str) -> Any:
         dark = self._is_dark_theme()
         key = (style, dark)
         cached = self._style_preview_cache.get(key)
         if cached is not None:
             return cached
         png = render_style_preview_png(style, self._pal(), width=164, height=82)
-        photo = tk.PhotoImage(data=png)
+        photo = png_bytes_to_photoimage(png, master=self.root)
         self._style_preview_cache[key] = photo
         return photo
 
@@ -830,7 +839,7 @@ class QuotaHUDApp:
 
         self._lbl_title = tk.Label(
             self._hdr, text=self._t("hud_title_used"), bg=pal["bg_main"], fg=pal["text_sec"],
-            font=("Malgun Gothic", 8, "bold"),
+            font=ui_font("ui", 8, "bold"),
         )
         self._lbl_title.pack(side="left")
         self._bind_drag(self._lbl_title)
@@ -868,7 +877,7 @@ class QuotaHUDApp:
             )
 
     def _make_icon_btn(
-        self, parent: tk.Widget, text: str, cmd, font: Tuple[Any, ...] = ("Segoe UI Symbol", 9)
+        self, parent: tk.Widget, text: str, cmd, font: Optional[Tuple[Any, ...]] = None
     ) -> tk.Label:
         pal = self._pal()
         lbl = tk.Label(
@@ -876,7 +885,7 @@ class QuotaHUDApp:
             text=text,
             bg=pal["bg_main"],
             fg=pal["text_sec"],
-            font=font,
+            font=font or ui_font("sym", 9),
             padx=3,
             pady=0,
             cursor="hand2",
@@ -913,7 +922,7 @@ class QuotaHUDApp:
 
         name_lbl = tk.Label(
             row, text=short_name, bg=pal["bg_card"], fg=pal["text_pri"],
-            font=("Segoe UI", 9, "bold"), width=4, anchor="w",
+            font=ui_font("num", 9, "bold"), width=4, anchor="w",
         )
         name_lbl.grid(row=0, column=1, sticky="w")
         self._bind_drag(name_lbl)
@@ -949,7 +958,7 @@ class QuotaHUDApp:
         # Row 1: 5-hour short-term (visible in 'dual' mode, hidden in 'slim' mode)
         lbl_5h = tk.Label(
             row, text="5h", bg=pal["bg_card"], fg=pal["text_muted"],
-            font=("Segoe UI", 8), width=4, anchor="w",
+            font=ui_font("num", 8), width=4, anchor="w",
         )
         lbl_5h.grid(row=1, column=1, pady=(1, 0), sticky="w")
         self._bind_drag(lbl_5h)
@@ -1009,14 +1018,14 @@ class QuotaHUDApp:
 
         name_lbl = tk.Label(
             card, text=short_name, bg=pal["bg_card"], fg=pal[accent_key],
-            font=("Segoe UI", 9, "bold"),
+            font=ui_font("num", 9, "bold"),
         )
         name_lbl.pack()
         self._bind_drag(name_lbl)
 
         sub_lbl = tk.Label(
             card, text=self._t("waiting"), bg=pal["bg_card"], fg=pal["text_sec"],
-            font=("Malgun Gothic", 7), justify="center",
+            font=ui_font("ui", 7), justify="center",
         )
         sub_lbl.pack(pady=(1, 0))
         self._bind_drag(sub_lbl)
@@ -1049,7 +1058,7 @@ class QuotaHUDApp:
         sub_lbl = tk.Label(hdr, text="", bg=pal["bg_card"], fg=pal["text_muted"], font=self._font_mono, anchor="e")
         sub_lbl.pack(side="right", padx=(4, 4))
 
-        bar = tk.Canvas(parent, width=272, height=4, bg=pal["bg_card"], highlightthickness=0)
+        bar = tk.Canvas(parent, width=DETAIL_BAR_WIDTH, height=4, bg=pal["bg_card"], highlightthickness=0)
         bar.pack(fill="x")
 
         return {
@@ -1065,7 +1074,7 @@ class QuotaHUDApp:
         pal = self._pal()
         btn = tk.Label(
             parent, text=text, bg=pal["bg_card"], fg=pal["text_muted"],
-            font=("Segoe UI Symbol", 7), padx=2, pady=0, cursor="hand2",
+            font=ui_font("sym", 7), padx=2, pady=0, cursor="hand2",
         )
         btn.bind("<Button-1>", lambda _e, p=prov, d=delta: self._move_provider(p, d))
         btn.bind("<Enter>", lambda _e, w=btn: w.configure(fg=self._pal()["text_pri"]))
@@ -1267,7 +1276,7 @@ class QuotaHUDApp:
         )
         FluentTooltip.bind(
             self._btn_hide,
-            lambda: self._t("tip_hide"),
+            lambda: self._t("tip_hide_macos" if sys.platform == "darwin" else "tip_hide"),
             self._is_dark_theme,
             delay_ms=300,
         )
@@ -1407,9 +1416,49 @@ class QuotaHUDApp:
 
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------ Fluent Context Menu
+    # ------------------------------------------------------------------ Fluent Context Menu & macOS Integration
     def _build_context_menu(self) -> None:
         self.root.bind("<Button-3>", self._show_context_menu)
+        if sys.platform == "darwin":
+            # macOS Aqua Tk maps secondary / two-finger click to Button-2 (and Ctrl+Click)
+            self.root.bind("<Button-2>", self._show_context_menu)
+            self.root.bind("<Control-Button-1>", self._show_context_menu)
+
+    def _setup_macos_integration(self) -> None:
+        if sys.platform != "darwin":
+            return
+        try:
+            self.root.createcommand("tk::mac::ReopenApplication", self._show_from_tray)
+            self.root.createcommand("tk::mac::ShowPreferences", lambda: self._open_settings("display"))
+            self.root.createcommand("tk::mac::Quit", self._quit)
+        except Exception:
+            pass
+        try:
+            menubar = tk.Menu(self.root)
+            app_menu = tk.Menu(menubar, name="apple", tearoff=0)
+            app_menu.add_command(label=self._t("menu_show"), command=self._show_from_tray)
+            app_menu.add_command(label=self._t("menu_refresh"), accelerator="Command-R", command=self._trigger_refresh)
+            app_menu.add_separator()
+            app_menu.add_command(label=self._t("menu_settings"), accelerator="Command-,", command=lambda: self._open_settings("display"))
+            menubar.add_cascade(menu=app_menu)
+
+            win_menu = tk.Menu(menubar, tearoff=0)
+            win_menu.add_command(label=self._t("menu_show"), command=self._show_from_tray)
+            win_menu.add_command(label=self._t("menu_hide"), accelerator="Command-H", command=self._hide_to_tray)
+            win_menu.add_command(label=self._t("menu_details"), command=self._toggle_expand)
+            win_menu.add_command(label=self._t("menu_topmost"), command=self._toggle_topmost)
+            win_menu.add_command(label=self._t("menu_snap"), command=lambda: (self._show_from_tray(), self._snap_to_taskbar()))
+            menubar.add_cascade(label="AI Usage Bar", menu=win_menu)
+            self.root.configure(menu=menubar)
+        except Exception:
+            pass
+        self.root.bind_all("<Command-r>", lambda _e: self._trigger_refresh())
+        self.root.bind_all("<Command-R>", lambda _e: self._trigger_refresh())
+        self.root.bind_all("<Command-comma>", lambda _e: self._open_settings("display"))
+        self.root.bind_all("<Command-h>", lambda _e: self._hide_to_tray())
+        self.root.bind_all("<Command-H>", lambda _e: self._hide_to_tray())
+        self.root.bind_all("<Command-q>", lambda _e: self._quit())
+        self.root.bind_all("<Command-Q>", lambda _e: self._quit())
 
     def _refresh_interval_sec(self) -> int:
         try:
@@ -1606,7 +1655,8 @@ class QuotaHUDApp:
     def _hide_to_tray(self) -> None:
         FluentTooltip.hide_active()
         self.cfg["visible"] = False
-        save_config(self.cfg)
+        if sys.platform == "win32":
+            save_config(self.cfg)
         self.root.withdraw()
 
     def _show_from_tray(self) -> None:
@@ -2044,7 +2094,7 @@ class QuotaHUDApp:
         if val is None:
             slot["pct"].configure(text="--%", fg=pal["text_muted"])
             slot["sub"].configure(text=empty_hint if empty_hint is not None else self._t("waiting"), fg=pal["text_muted"])
-            draw_rounded_bar(slot["bar"], None, col, width=272, height=4, track_color=pal["bg_track"])
+            draw_rounded_bar(slot["bar"], None, col, width=DETAIL_BAR_WIDTH, height=4, track_color=pal["bg_track"])
             return
 
         slot["pct"].configure(text=self._t("reset_short") if exp else format_pct_detail(val, mode), fg=col)
@@ -2062,7 +2112,7 @@ class QuotaHUDApp:
         bar_val = (0.0 if mode == "used" else 100.0) if exp else val
         marker_pct = self._pace_marker_for(bucket, window_sec, now, mode)
         draw_rounded_bar(
-            slot["bar"], bar_val, col, width=272, height=4,
+            slot["bar"], bar_val, col, width=DETAIL_BAR_WIDTH, height=4,
             track_color=pal["bg_track"], pace_marker_pct=marker_pct, marker_color=pal["text_pri"],
         )
 
@@ -2183,11 +2233,11 @@ class QuotaHUDApp:
         if style == "ring":
             rc = self._ring_cards[prov]
             if n_enabled == 1:
-                r_size, ow, iw, c_font = 84, 7, 4, ("Segoe UI", 12, "bold")
+                r_size, ow, iw, c_font = 84, 7, 4, ui_font("num", 12, "bold")
             elif n_enabled == 2:
-                r_size, ow, iw, c_font = 70, 6, 4, ("Segoe UI", 10, "bold")
+                r_size, ow, iw, c_font = 70, 6, 4, ui_font("num", 10, "bold")
             else:
-                r_size, ow, iw, c_font = 60, 5, 3, ("Segoe UI", 9, "bold")
+                r_size, ow, iw, c_font = 60, 5, 3, ui_font("num", 9, "bold")
 
             cv = rc["canvas"]
             if int(cv.cget("width")) != r_size:
@@ -2217,7 +2267,7 @@ class QuotaHUDApp:
                     outer_w=ow,
                     inner_w=iw,
                 )
-                photo = tk.PhotoImage(data=png)
+                photo = png_bytes_to_photoimage(png, master=self.root)
                 self._ring_photo_cache[prov] = (cache_key, photo)
 
             rc["photo"] = photo

@@ -9,7 +9,29 @@ import re
 import subprocess
 import sys
 import tkinter as tk
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
+
+
+def ui_font(role: str, size: int, weight: str = "") -> Tuple[Any, ...]:
+    """Return a platform-appropriate Tk font tuple with equivalent visual sizing on Windows & macOS."""
+    if sys.platform == "darwin":
+        family_map = {
+            "ui": "Apple SD Gothic Neo",
+            "num": "Helvetica Neue",
+            "sym": "Apple SD Gothic Neo",
+            "mono": "Menlo",
+        }
+        fam = family_map.get(role, "Apple SD Gothic Neo")
+        scaled = max(9, int(round(size * 1.28)))
+        return (fam, scaled, weight) if weight else (fam, scaled)
+    family_map = {
+        "ui": "Malgun Gothic",
+        "num": "Segoe UI",
+        "sym": "Segoe UI Symbol",
+        "mono": "Consolas",
+    }
+    fam = family_map.get(role, "Malgun Gothic")
+    return (fam, size, weight) if weight else (fam, size)
 
 if sys.platform == "win32":
     import winreg
@@ -175,7 +197,11 @@ def get_monitor_work_area_for_point(x: int, y: int) -> Tuple[int, int, int, int]
                     return w.left, w.top, w.right, w.bottom
         except Exception:
             pass
-    return get_primary_work_area()
+    wl, wt, wr, wb = get_primary_work_area()
+    if sys.platform == "darwin" and not (wl <= x <= wr and 0 <= y <= wb + 80):
+        # Preserve position when user placed HUD on a secondary macOS display
+        return min(wl, x - 400), min(wt, y - 300), max(wr, x + 500), max(wb, y + 500)
+    return wl, wt, wr, wb
 
 
 def _hex_to_colorref(hex_color: str) -> int:
@@ -311,6 +337,43 @@ class FluentPopupMenu:
         self._master = master
         self._closed = False
         self._mouse_was_down = True
+        self._native_menu: Optional[tk.Menu] = None
+        self._native_vars: List[tk.BooleanVar] = []
+
+        if sys.platform == "darwin":
+            # Use native macOS Cocoa popup menu for reliable dark/light theme & outside-click dismissal
+            menu = tk.Menu(master, tearoff=0)
+            self._native_menu = menu
+            for item in items:
+                if item.separator:
+                    menu.add_separator()
+                    continue
+
+                def _invoke(cmd=item.command) -> None:
+                    self.close()
+                    if cmd:
+                        self._master.after(10, cmd)
+
+                if item.checked is not None:
+                    var = tk.BooleanVar(master=master, value=bool(item.checked))
+                    self._native_vars.append(var)
+                    menu.add_checkbutton(label=item.label, variable=var, command=_invoke)
+                else:
+                    menu.add_command(label=item.label, command=_invoke)
+
+            FluentPopupMenu._active = self
+            try:
+                menu.tk_popup(int(x), int(y))
+            finally:
+                try:
+                    menu.grab_release()
+                except Exception:
+                    pass
+                if FluentPopupMenu._active is self:
+                    FluentPopupMenu._active = None
+                self._master.after(250, self.close)
+            return
+
         dark = is_windows_dark_mode(system_surface=system_surface) if force_dark is None else force_dark
         pal = _win11_menu_palette(dark)
         self._pal = pal
@@ -324,8 +387,8 @@ class FluentPopupMenu:
         container = tk.Frame(win, bg=pal["bg"], padx=5, pady=5)
         container.pack(fill="both", expand=True)
 
-        font_item = ("Malgun Gothic", 9)
-        font_icon = ("Segoe UI Symbol", 9)
+        font_item = ui_font("ui", 9)
+        font_icon = ui_font("sym", 9)
 
         for item in items:
             if item.separator:
@@ -479,6 +542,14 @@ class FluentPopupMenu:
         self._closed = True
         if FluentPopupMenu._active is self:
             FluentPopupMenu._active = None
+        if getattr(self, "_native_menu", None) is not None:
+            try:
+                self._native_menu.unpost()
+                self._native_menu.destroy()
+            except Exception:
+                pass
+            self._native_menu = None
+            return
         try:
             self._win.destroy()
         except Exception:
@@ -627,7 +698,7 @@ class FluentTooltip:
                         text=lines[0],
                         bg=pal["bg"],
                         fg=pal["accent"],
-                        font=("Malgun Gothic", 8, "bold"),
+                        font=ui_font("ui", 8, "bold"),
                         justify="left",
                         anchor="w",
                     ).pack(fill="x", pady=(0, 3))
@@ -636,7 +707,7 @@ class FluentTooltip:
                         text="\n".join(lines[1:]),
                         bg=pal["bg"],
                         fg=pal["fg"],
-                        font=("Malgun Gothic", 8),
+                        font=ui_font("ui", 8),
                         justify="left",
                         anchor="w",
                     ).pack(fill="x")
@@ -646,7 +717,7 @@ class FluentTooltip:
                         text=lines[0],
                         bg=pal["bg"],
                         fg=pal["fg"],
-                        font=("Malgun Gothic", 8),
+                        font=ui_font("ui", 8),
                         justify="left",
                         anchor="w",
                     ).pack()
@@ -689,4 +760,7 @@ class FluentTooltip:
             w.bind("<Enter>", on_enter, add="+")
             w.bind("<Leave>", on_leave, add="+")
             w.bind("<ButtonPress-1>", lambda _e: cls.hide_active(), add="+")
+            w.bind("<ButtonPress-2>", lambda _e: cls.hide_active(), add="+")
             w.bind("<ButtonPress-3>", lambda _e: cls.hide_active(), add="+")
+            if sys.platform == "darwin":
+                w.bind("<Control-ButtonPress-1>", lambda _e: cls.hide_active(), add="+")
