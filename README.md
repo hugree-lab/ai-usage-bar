@@ -28,7 +28,33 @@
 
 ---
 
-## Fixed-Size 4-Tab Settings & 24h / 7d Usage Trends
+## 13 UI Design Themes Gallery (26 Dark & Light Looks)
+
+<p align="center">
+  <img src="assets/ui_themes_en.png" alt="AI Usage Bar — 13 UI Design Themes Gallery (26 Dark & Light Looks)" width="100%" />
+</p>
+
+More than simple color swaps — every theme reshapes **window chrome, titlebars, progress gauges, dual rings, and icons**. Each of the **13 UI themes** ships with hand-tuned **Dark & Light** palettes and switches instantaneously from the **right-click → UI Themes** menu or **Settings (`⚙`) → UI Themes** gallery:
+
+| Theme | Style & Visual Highlights |
+|---|---|
+| **Modern** | Clean elevated cards with smooth capsule progress bars |
+| **Liquid Glass** | Frosted specular glass rims, crystal traffic dots & refractive glass pills |
+| **Silver Classic** | Brushed aluminum titlebar, 3D jewel traffic dots & glossy gel bars |
+| **Blue 2001** | 2001 nostalgia glossy blue titlebar, red X button & 3D green segmented blocks |
+| **Retro 95** | 1995 classic desktop window with navy titlebar & raised 3D bevel cards |
+| **Paper Sky** | Watercolor summer sky, meadow hills & gliding paper airplane *(Dark: starry night)* |
+| **Paper Sea** | Sunlit watercolor ocean ripples & drifting paper sailboat *(Dark: moonlit lantern)* |
+| **Hare & Tortoise** | Your usage (Hare) races against recommended time pace (Tortoise) on a clay track |
+| **RPG Quest** | Mood-reactive pixel heroes, Royal Navy/Ivory frames & HP (7d) / MP (5h) bars |
+| **Neo-Brutal** | Bold 2px ink borders with crisp 3px hard offset shadows |
+| **Thermometer** | Glass mercury bulb, `°C` scale ticks & heat-reactive boiling bubbles |
+| **Battery Cell** | Physical battery housing with `+` metal terminal & glowing charge cells |
+| **Tachometer** | Sports car RPM gauge with crimson redline (`75%+`) & radial needle |
+
+---
+
+## Fixed-Size 5-Tab Settings & 24h / 7d Usage Trends
 
 <p align="center">
   <img src="assets/settings_trends_en.png" alt="Settings Dialog & 24h Usage Trends" width="100%" />
@@ -111,7 +137,7 @@ python3 macos/build_macos.py
 ```
 
 ### Automated Releases (GitHub Actions)
-Pushing a version tag (e.g. `git tag v1.8.4 && git push origin v1.8.4`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
+Pushing a version tag (e.g. `git tag v1.8.5 && git push origin v1.8.5`) automatically builds both **`AIUsageBar-Setup.exe`** (Windows) and **`AIUsageBar-macOS.dmg`** (macOS) via [`.github/workflows/release.yml`](.github/workflows/release.yml) and publishes them to GitHub Releases.
 
 ---
 

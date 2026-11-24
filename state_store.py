@@ -42,6 +42,31 @@ SESSION_5H_WINDOW_SEC = 5.0 * 3600.0
 
 ALL_PROVIDERS = ("antigravity", "claude", "codex")
 COMPACT_STYLES = ("dual", "slim", "ring")
+PRIMARY_METRICS = ("weekly", "5h")
+UI_THEMES = (
+    "modern",
+    "liquid_glass",
+    "silver_metal",
+    "bliss_01",
+    "retro_95",
+    "paper_sky",
+    "paper_sea",
+    "runner",
+    "rpg",
+    "brutal",
+    "thermo",
+    "battery",
+    "speedo",
+)
+LEGACY_UI_THEME_ALIASES: Dict[str, str] = {
+    "mac_glass": "liquid_glass",
+    "mac_aqua": "silver_metal",
+    "winxp": "bliss_01",
+    "win95": "retro_95",
+    "ghibli_sky": "paper_sky",
+    "ghibli_sea": "paper_sea",
+}
+COLOR_THEMES = UI_THEMES  # Backwards-compatible alias
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "x": None,
@@ -53,10 +78,12 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_refresh": True,
     "refresh_interval_sec": 180,
     "display_mode": "used",  # "used" (사용량 %, default) or "remaining" (남은량 %)
+    "primary_metric": "weekly",  # "weekly" (주간 우선) or "5h" (5시간 우선)
+    "emphasize_urgent": True,  # Auto-emphasize secondary row when >= 75% (warn) / 90% (crit)
     "enabled_providers": ["antigravity", "claude"],
     "provider_order": ["antigravity", "claude", "codex"],
     "compact_style": "dual",  # "dual" (2줄 주간+5h), "slim" (1줄 2단바), "ring" (원형 링)
-    "slim_sub_metric": "5h",  # "5h" or "model" (for slim mode right indicator)
+    "slim_sub_metric": "5h",  # "5h" (sub window) or "model" (Ar/Fb)
     "show_pace_marker": True,  # Show time-elapsed pace tick '|' on progress bars
     "notifications": True,
     "notify_warn_pct": 80,  # 0 = off, or 60..90
@@ -65,7 +92,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "notify_include_5h": True,
     "hotkey_enabled": True,
     "hotkey": "Ctrl+Alt+Q",
-    "theme": "auto",  # "auto" (OS), "dark", "light"
+    "theme": "auto",  # Appearance mode: "auto" (OS), "dark", "light"
+    "ui_theme": "modern",  # Visual UI design theme (each has Dark & Light): modern, hardware, terminal, brutal, minimal
     "language": "auto",  # "auto" (OS), "ko", "en"
 }
 
@@ -313,8 +341,18 @@ def load_config() -> Dict[str, Any]:
     cfg["enabled_providers"] = normalize_enabled_providers(cfg.get("enabled_providers"), cfg["provider_order"])
     if cfg.get("compact_style") not in COMPACT_STYLES:
         cfg["compact_style"] = "dual"
+    if str(cfg.get("primary_metric") or "weekly").lower() not in PRIMARY_METRICS:
+        cfg["primary_metric"] = "weekly"
+    else:
+        cfg["primary_metric"] = str(cfg.get("primary_metric") or "weekly").lower()
+    cfg["emphasize_urgent"] = bool(cfg.get("emphasize_urgent", True))
     if cfg.get("slim_sub_metric") not in ("5h", "model"):
         cfg["slim_sub_metric"] = "5h"
+    raw_theme = str(cfg.get("theme") or "auto").lower()
+    cfg["theme"] = raw_theme if raw_theme in ("auto", "dark", "light") else "auto"
+    raw_ut = str(cfg.get("ui_theme") or "modern").lower()
+    raw_ut = LEGACY_UI_THEME_ALIASES.get(raw_ut, raw_ut)
+    cfg["ui_theme"] = raw_ut if raw_ut in UI_THEMES else "modern"
     try:
         w_pct = int(cfg.get("notify_warn_pct", 80))
         cfg["notify_warn_pct"] = 0 if w_pct <= 0 else max(10, min(99, w_pct))

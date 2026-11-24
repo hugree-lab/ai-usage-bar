@@ -10,15 +10,22 @@ import sys
 from typing import Dict
 
 LANG_CHOICES = ("auto", "ko", "en")
+_OS_LANG_CACHE: str | None = None
 
 
 def detect_os_language() -> str:
-    """Return 'ko' if the OS UI language is Korean, otherwise 'en'."""
+    """Return 'ko' if the OS UI language is Korean, otherwise 'en' (cached)."""
+    global _OS_LANG_CACHE
+    if _OS_LANG_CACHE is not None:
+        return _OS_LANG_CACHE
+    result = "en"
     try:
         if sys.platform == "win32":
             # Win32 GetUserDefaultUILanguage primary lang ID: Korean == 0x12
             lang_id = int(ctypes.WinDLL("kernel32").GetUserDefaultUILanguage())
-            return "ko" if (lang_id & 0x3FF) == 0x12 else "en"
+            result = "ko" if (lang_id & 0x3FF) == 0x12 else "en"
+            _OS_LANG_CACHE = result
+            return result
         if sys.platform == "darwin":
             proc = subprocess.run(
                 ["defaults", "read", "-g", "AppleLanguages"],
@@ -26,22 +33,25 @@ def detect_os_language() -> str:
             )
             if proc.returncode == 0:
                 first_lines = " ".join(proc.stdout.splitlines()[:3]).lower()
-                if "ko" in first_lines:
-                    return "ko"
-                return "en"
+                result = "ko" if "ko" in first_lines else "en"
+                _OS_LANG_CACHE = result
+                return result
     except Exception:
         pass
 
     env_lang = (os.environ.get("LC_ALL") or os.environ.get("LANG") or "").lower()
     if env_lang.startswith("ko"):
+        _OS_LANG_CACHE = "ko"
         return "ko"
     try:
         loc = (locale.getdefaultlocale()[0] or "").lower()
         if loc.startswith("ko"):
+            _OS_LANG_CACHE = "ko"
             return "ko"
     except Exception:
         pass
-    return "en"
+    _OS_LANG_CACHE = result
+    return result
 
 
 def resolve_lang(pref: str = "auto") -> str:
@@ -56,6 +66,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # HUD header & titles
         "hud_title_used": "AI 주간 사용량",
         "hud_title_rem": "AI 주간 잔여량",
+        "hud_title_5h_used": "AI 5시간 사용량",
+        "hud_title_5h_rem": "AI 5시간 잔여량",
+        "tip_pri_toggle": "클릭: 메인 기준 전환 (주간 7d ↔ 5시간 5h)",
         "tip_title": "드래그: 이동 · 더블클릭: 작업표시줄 위로 정렬",
         "tip_refresh_busy": "새로고침 진행 중...",
         "tip_refresh": "지금 새로고침 (사용량 차감 없음)",
@@ -116,16 +129,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "btn_mode_used": "표시: 사용%",
         "btn_mode_rem": "표시: 남음%",
         "btn_snap": "정렬",
-        "btn_settings_all": "⚙ 설정 · 추이 · 안내",
+        "btn_settings_all": "⚙\uFE0E 설정 · 추이 · 안내",
 
         # Context menu
         "menu_refresh": "지금 새로고침",
         "menu_details": "상세 보기",
+        "menu_primary_5h": "5시간 우선 표시",
         "menu_topmost": "항상 최상위 고정",
         "menu_snap": "작업표시줄 위로 이동",
         "menu_hide": "위젯 숨기기",
         "menu_show": "위젯 보이기",
         "menu_trends": "사용 추이 / 페이스",
+        "menu_themes": "UI 테마 갤러리 (13종)...",
         "menu_settings": "설정 · 단축키 · 안내...",
         "menu_quit": "종료",
 
@@ -155,9 +170,10 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # Settings dialog
         "set_win_title": "AI Usage Bar 설정  v{ver}",
         "tab_display": "화면 · 순서",
-        "tab_alerts": "알림 · 단축키",
-        "tab_trends": "사용 추이",
-        "tab_help": "사용 안내",
+        "tab_themes": "UI 테마",
+        "tab_alerts": "알림 · 키",
+        "tab_trends": "추이",
+        "tab_help": "안내",
         "btn_open_data": "데이터 폴더 열기",
         "btn_close": "닫기",
         "sec_style_title": "최소창 스타일 미리보기",
@@ -170,17 +186,52 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "chip_shown": "표시",
         "chip_hidden": "숨김",
         "lbl_mode": "표시 기준",
+        "lbl_primary_metric": "메인 우선",
+        "chip_pri_wk": "주간 (7d)",
+        "chip_pri_5h": "5시간 (5h)",
+        "chip_emph_urgent": "임박 강조",
         "lbl_pace_row": "페이스 눈금 (|) — 바 위 경과 시점",
         "lbl_mode_and_pace": "표시 기준 · 페이스 눈금",
         "chip_pace_marker": "페이스 눈금 |",
         "chip_used_pct": "사용량 %",
         "chip_rem_pct": "남은량 %",
-        "lbl_theme": "테마",
+        "lbl_theme": "모드",
+        "lbl_ui_theme": "UI 디자인 테마",
         "lbl_lang": "언어",
         "lbl_theme_lang": "테마 · 언어",
         "theme_auto": "자동",
         "theme_dark": "다크",
         "theme_light": "라이트",
+        "ut_modern": "모던",
+        "ut_liquid_glass": "리퀴드 글래스",
+        "ut_silver_metal": "실버 클래식",
+        "ut_paper_sky": "종이비행기",
+        "ut_paper_sea": "종이돛단배",
+        "ut_rpg": "RPG 게임",
+        "ut_runner": "토끼와 거북이",
+        "ut_thermo": "온도계",
+        "ut_battery": "배터리",
+        "ut_speedo": "계기판",
+        "ut_bliss_01": "블루 2001",
+        "ut_retro_95": "레트로 95",
+        "ut_brutal": "브루탈",
+        "ut_modern_desc": "깔끔한 기본 카드 + 매끄러운 캡슐 게이지",
+        "ut_liquid_glass_desc": "반투명 크리스탈 유리 림 · 3색 신호등 도트 · 굴절 글래스 캡슐 바",
+        "ut_silver_metal_desc": "브러시드 알루미늄 타이틀바 · 3D 입체 보석 도트 · 광택 젤리 바",
+        "ut_paper_sky_desc": "수채화 여름 하늘 & 초원 언덕 위를 비행운 그리며 날아가는 하얀 종이비행기 (다크: 별밤)",
+        "ut_paper_sea_desc": "수채화 에메랄드 바다 & 윤슬 파도 위를 잔잔히 떠가는 종이돛단배 (다크: 달빛 등불)",
+        "ut_rpg_desc": "픽셀 영웅(상태별 표정!) + 로열 네이비/아이보리 + HP(주간) · MP(5h) 게임 HUD",
+        "ut_runner_desc": "내 사용량(토끼)과 권장 시간 페이스(거북이)가 육상 트랙에서 실시간 경주!",
+        "ut_thermo_desc": "유리 수은 온도계 — 둥근 구슬 · 눈금 · 과열 시 끓는 기포",
+        "ut_battery_desc": "양극(+) 단자가 달린 물리 배터리 에너지 셀 게이지",
+        "ut_speedo_desc": "스포츠카 RPM 타코미터 — 빨간 레드존(75%+) + 속도계 바늘",
+        "ut_bliss_01_desc": "2001년 감성 광택 블루 타이틀바 · 빨간 X 버튼 · 초록 입체 블록 게이지",
+        "ut_retro_95_desc": "1995년 클래식 창 — 네이비 타이틀바 + 3D 입체 베벨 카드",
+        "ut_brutal_desc": "네오 브루탈리즘 — 2px 굵은 외곽선 + 3px 하드 그림자",
+        "sec_themes_title": "UI 디자인 테마 갤러리 (13종 · 다크/라이트 지원)",
+        "sec_themes_preview": "선택한 테마의 최소창 3종 미리보기",
+        "btn_open_themes": "UI 테마 13종 변경 →",
+        "opt_slim_7d": "주간 (7d)",
         "lang_auto": "OS 자동",
         "lbl_opacity": "위젯 투명도",
 
@@ -208,7 +259,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ref_cdx_missing": "Codex 미설치 또는 사용 기록 없음",
 
         "sec_alert_title": "사용량 알림 수동 설정",
-        "btn_alert_test": "🔔 알림 테스트",
+        "btn_alert_test": "알림 테스트",
         "chip_alert_on": "알림 켜짐",
         "chip_alert_off": "알림 꺼짐",
         "lbl_warn_th": "주의 알림 (사용량)",
@@ -231,7 +282,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "min_fmt": "{m}분",
         "chip_auto_refresh": "자동 새로고침",
         "chip_startup": "시작 시 자동 실행",
-        "btn_reconnect": "⚡ 훅 재연결",
+        "btn_reconnect": "↻ 훅 재연결",
         "btn_reconnected": "재연결 완료 ✓",
 
         "trends_legend": "실선: 주간  ·  가는 선: 5시간  ·  점선: 주의 기준",
@@ -252,7 +303,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "help_l4_v": "전체 기간 중 현재 경과 시점입니다. 막대가 짧으면 여유, 길면 빠름!",
         "legend_ok": "여유 (시그니처)",
         "legend_warn": "주의 (75%+)",
-        "legend_crit": "경고 ⚠ (90%+)",
+        "legend_crit": "경고 ⚠\uFE0E (90%+)",
         "legend_reset": "리셋 완료",
         "help_c2_title": "2. 편리한 단축 조작법",
         "help_s1_k": "• 최소창 행/원형 호버",
@@ -372,6 +423,9 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # HUD header & titles
         "hud_title_used": "AI Weekly Usage",
         "hud_title_rem": "AI Weekly Left",
+        "hud_title_5h_used": "AI 5h Usage",
+        "hud_title_5h_rem": "AI 5h Left",
+        "tip_pri_toggle": "Click: Swap primary metric (Weekly 7d ↔ 5h)",
         "tip_title": "Drag to move · Double-click to snap above taskbar",
         "tip_refresh_busy": "Refreshing...",
         "tip_refresh": "Refresh now (no quota deducted)",
@@ -432,16 +486,18 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "btn_mode_used": "Mode: Used%",
         "btn_mode_rem": "Mode: Left%",
         "btn_snap": "Snap",
-        "btn_settings_all": "⚙ Settings · Trends",
+        "btn_settings_all": "⚙\uFE0E Settings · Trends",
 
         # Context menu
         "menu_refresh": "Refresh Now",
         "menu_details": "Show Details",
+        "menu_primary_5h": "Prioritize 5h Session",
         "menu_topmost": "Always on Top",
         "menu_snap": "Snap Above Taskbar",
         "menu_hide": "Hide to Tray",
         "menu_show": "Show Widget",
         "menu_trends": "Usage Trends / Pace",
+        "menu_themes": "UI Theme Gallery (13)...",
         "menu_settings": "Settings · Hotkey · Guide...",
         "menu_quit": "Quit",
 
@@ -471,7 +527,8 @@ STRINGS: Dict[str, Dict[str, str]] = {
         # Settings dialog
         "set_win_title": "AI Usage Bar Settings  v{ver}",
         "tab_display": "Display",
-        "tab_alerts": "Alerts & Key",
+        "tab_themes": "UI Themes",
+        "tab_alerts": "Alerts",
         "tab_trends": "Trends",
         "tab_help": "Guide",
         "btn_open_data": "Open Data Folder",
@@ -486,17 +543,52 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "chip_shown": "Shown",
         "chip_hidden": "Hidden",
         "lbl_mode": "Display Mode",
+        "lbl_primary_metric": "Primary",
+        "chip_pri_wk": "Weekly (7d)",
+        "chip_pri_5h": "5h Session",
+        "chip_emph_urgent": "Highlight Urgent",
         "lbl_pace_row": "Pace Tick (|) — Elapsed time on bar",
         "lbl_mode_and_pace": "Display Mode · Pace Tick",
         "chip_pace_marker": "Pace Tick |",
         "chip_used_pct": "Used %",
         "chip_rem_pct": "Left %",
-        "lbl_theme": "Theme",
+        "lbl_theme": "Mode",
+        "lbl_ui_theme": "UI Design Theme",
         "lbl_lang": "Lang",
         "lbl_theme_lang": "Theme · Language",
         "theme_auto": "Auto",
         "theme_dark": "Dark",
         "theme_light": "Light",
+        "ut_modern": "Modern",
+        "ut_liquid_glass": "Liquid Glass",
+        "ut_silver_metal": "Silver Classic",
+        "ut_paper_sky": "Paper Sky",
+        "ut_paper_sea": "Paper Sea",
+        "ut_rpg": "RPG Quest",
+        "ut_runner": "Hare & Tortoise",
+        "ut_thermo": "Thermometer",
+        "ut_battery": "Battery Cell",
+        "ut_speedo": "Tachometer",
+        "ut_bliss_01": "Blue 2001",
+        "ut_retro_95": "Retro 95",
+        "ut_brutal": "Neo-Brutal",
+        "ut_modern_desc": "Clean elevated cards + smooth capsule bars",
+        "ut_liquid_glass_desc": "Frosted specular glass rims, crystal traffic dots & refractive pills",
+        "ut_silver_metal_desc": "Brushed aluminum titlebar, 3D jewel traffic dots & glossy gel bars",
+        "ut_paper_sky_desc": "White paper airplane gliding over watercolor summer clouds & meadow hills (Dark: starry night)",
+        "ut_paper_sea_desc": "Origami paper sailboat drifting on sunlit watercolor ocean ripples (Dark: moonlit lantern)",
+        "ut_rpg_desc": "Pixel hero sprites (react to usage!) + Royal Navy/Ivory + HP (7d) & MP (5h) bars",
+        "ut_runner_desc": "Your usage (Hare) races against recommended time pace (Tortoise) on a track!",
+        "ut_thermo_desc": "Glass mercury thermometer with bulb, scale ticks & boiling bubbles",
+        "ut_battery_desc": "Physical battery cell housing with '+' terminal & glowing cells",
+        "ut_speedo_desc": "Sports car RPM gauge with crimson redline (75%+) & dial needle",
+        "ut_bliss_01_desc": "2001 nostalgia glossy blue titlebar, red X button & 3D green blocks",
+        "ut_retro_95_desc": "1995 classic desktop — raised 3D bevel cards & navy titlebar",
+        "ut_brutal_desc": "Neo-Brutalist 2px ink borders + hard 3px offset shadows",
+        "sec_themes_title": "UI Design Theme Gallery (13 Themes · Dark & Light)",
+        "sec_themes_preview": "Live Preview of Selected Theme (3 Compact Styles)",
+        "btn_open_themes": "Browse 13 UI Themes →",
+        "opt_slim_7d": "Weekly (7d)",
         "lang_auto": "OS Auto",
         "lbl_opacity": "Widget Opacity",
 
@@ -524,7 +616,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "ref_cdx_missing": "Codex CLI not found or no session logs",
 
         "sec_alert_title": "Custom Usage Alerts",
-        "btn_alert_test": "🔔 Test Alert",
+        "btn_alert_test": "Test Alert",
         "chip_alert_on": "Alerts ON",
         "chip_alert_off": "Alerts OFF",
         "lbl_warn_th": "Warning threshold",
@@ -547,7 +639,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "min_fmt": "{m}m",
         "chip_auto_refresh": "Auto Refresh",
         "chip_startup": "Start at Login",
-        "btn_reconnect": "⚡ Reconnect Hooks",
+        "btn_reconnect": "↻ Reconnect Hooks",
         "btn_reconnected": "Reconnected ✓",
 
         "trends_legend": "Solid: Weekly  ·  Thin: 5h  ·  Dashed: Warn threshold",
@@ -568,7 +660,7 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "help_l4_v": "Elapsed time in the window. Shorter bar = relaxed, longer = fast!",
         "legend_ok": "Healthy (Brand)",
         "legend_warn": "Warning (75%+)",
-        "legend_crit": "Critical ⚠ (90%+)",
+        "legend_crit": "Critical ⚠\uFE0E (90%+)",
         "legend_reset": "Reset",
         "help_c2_title": "2. Quick Shortcuts",
         "help_s1_k": "• Hover compact row/ring",

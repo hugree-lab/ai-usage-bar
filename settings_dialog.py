@@ -18,11 +18,17 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from hooks_manager import APP_VERSION
 from hotkey_manager import format_tk_key_event
-from preview_art import png_bytes_to_photoimage, render_history_chart_png, render_style_preview_png
+from preview_art import (
+    png_bytes_to_photoimage,
+    render_history_chart_png,
+    render_style_preview_png,
+    render_ui_theme_chip_png,
+)
 from state_store import (
     BASE_DIR,
     COMPACT_STYLES,
     DATA_DIR,
+    UI_THEMES,
     WEEKLY_WINDOW_SEC,
     compute_pace,
     format_relative_age,
@@ -37,9 +43,10 @@ from win11_ui import apply_win11_dwm, get_hwnd, get_monitor_work_area_for_point,
 if TYPE_CHECKING:
     from hud_app import QuotaHUDApp
 
-VALID_TABS = ("display", "alerts", "trends", "help")
+VALID_TABS = ("display", "themes", "alerts", "trends", "help")
 TAB_KEYS = (
     ("display", "tab_display"),
+    ("themes", "tab_themes"),
     ("alerts", "tab_alerts"),
     ("trends", "tab_trends"),
     ("help", "tab_help"),
@@ -54,6 +61,8 @@ class SettingsDialog:
         self.active_tab = initial_tab if initial_tab in VALID_TABS else "display"
         self.trend_hours: float = 24.0
         self._closed = False
+        self._pending_rebuild: Optional[str] = None
+        self._root_frame: Optional[tk.Frame] = None
         self._recording_hotkey = False
         self._hotkey_status_msg: str = ""
         self._hotkey_status_ok: bool = True
@@ -80,41 +89,25 @@ class SettingsDialog:
         self._f_small = ui_font("ui", 8)
         self._f_mono = ui_font("num", 8)
         self._f_kbd = ui_font("mono", 9, "bold")
-        self._fixed_w: int = 618
-        self._fixed_h: int = 656
+        self._fixed_w: int = 696
+        self._fixed_h: int = 736
 
         self.win.withdraw()
-        self._measure_fixed_size()
-        self._rebuild_contents()
+        self._compute_fixed_size()
+        self._rebuild_contents(preserve_pos=False)
         self._position_near_hud()
         self.win.deiconify()
+        self.win.lift()
+        self.win.focus_force()
         self._apply_dwm()
 
-    def _measure_fixed_size(self) -> None:
-        """Measure max dimensions across all 4 tabs in both KO & EN ONCE and lock size."""
-        saved_tab = self.active_tab
-        saved_lang = self.app.cfg.get("language", "auto")
-        max_w = 618
-        max_h = 648
-        try:
-            for probe_lang in ("ko", "en"):
-                self.app.cfg["language"] = probe_lang
-                for tab in VALID_TABS:
-                    self.active_tab = tab
-                    self._rebuild_contents(preserve_pos=False)
-                    self.win.update_idletasks()
-                    extra_h = 34 if tab == "display" else 20
-                    max_w = max(max_w, self.win.winfo_reqwidth() + 10)
-                    max_h = max(max_h, self.win.winfo_reqheight() + extra_h)
-        finally:
-            self.app.cfg["language"] = saved_lang
-            self.active_tab = saved_tab
-
+    def _compute_fixed_size(self) -> None:
+        """Compute deterministic fixed dimensions clamped to the active monitor (instant open!)."""
         hx = self.app.root.winfo_x() + 155
         hy = self.app.root.winfo_y() + 60
         wl, wt, wr, wb = get_monitor_work_area_for_point(hx, hy)
-        self._fixed_w = min(max_w, wr - wl - 32)
-        self._fixed_h = min(max_h, wb - wt - 32)
+        self._fixed_w = min(696, wr - wl - 32)
+        self._fixed_h = min(736, wb - wt - 32)
         self.win.minsize(self._fixed_w, self._fixed_h)
         self.win.maxsize(self._fixed_w, self._fixed_h)
 
@@ -125,6 +118,8 @@ class SettingsDialog:
         return None
 
     def _apply_dwm(self) -> None:
+        if self._closed or not self.win.winfo_exists():
+            return
         pal = self.app._pal()
         dark = self.app._is_dark_theme()
         self.win.update_idletasks()
@@ -146,27 +141,56 @@ class SettingsDialog:
         py = wt + max(16, (wb - wt - h) // 2)
         self.win.geometry(f"{w}x{h}+{px}+{py}")
 
-    def show_tab(self, tab: str) -> None:
+    def _schedule_rebuild(self, preserve_pos: bool = True, lift: bool = False) -> None:
+        """Defer UI rebuild off the active <Button-1> stack without stealing macOS Cocoa focus."""
+        if self._closed:
+            return
+        if self._pending_rebuild is not None:
+            try:
+                self.win.after_cancel(self._pending_rebuild)
+            except Exception:
+                pass
+            self._pending_rebuild = None
+        self._pending_rebuild = self.win.after(1, lambda: self._run_scheduled_rebuild(preserve_pos, lift))
+
+    def _run_scheduled_rebuild(self, preserve_pos: bool, lift: bool) -> None:
+        self._pending_rebuild = None
+        if self._closed or not self.win.winfo_exists():
+            return
+        self._rebuild_contents(preserve_pos=preserve_pos)
+        self._apply_dwm()
+        if lift and not self._closed:
+            try:
+                if not self.win.winfo_ismapped():
+                    self.win.deiconify()
+                self.win.lift()
+                self.win.focus_force()
+            except Exception:
+                pass
+
+    def show_tab(self, tab: str, raise_win: bool = True) -> None:
         if self._closed:
             return
         self._recording_hotkey = False
         self.active_tab = tab if tab in VALID_TABS else "display"
-        self._rebuild_contents(preserve_pos=True)
-        self.win.deiconify()
-        self.win.lift()
-        self.win.focus_force()
+        self._schedule_rebuild(preserve_pos=True, lift=raise_win)
 
     def refresh_theme(self) -> None:
         if self._closed:
             return
-        self._rebuild_contents(preserve_pos=True)
-        self._apply_dwm()
+        self._schedule_rebuild(preserve_pos=True, lift=False)
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         self._recording_hotkey = False
+        if self._pending_rebuild is not None:
+            try:
+                self.win.after_cancel(self._pending_rebuild)
+            except Exception:
+                pass
+            self._pending_rebuild = None
         if getattr(self.app, "_settings_dlg", None) is self:
             self.app._settings_dlg = None
         try:
@@ -182,7 +206,7 @@ class SettingsDialog:
                 self._recording_hotkey = False
                 self._hotkey_status_msg = t("hk_cancelled")
                 self._hotkey_status_ok = True
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
                 return "break"
             formatted = format_tk_key_event(int(event.state), str(event.keysym))
             if formatted:
@@ -190,7 +214,7 @@ class SettingsDialog:
                 ok, msg = self.app._update_hotkey(True, formatted)
                 self._hotkey_status_ok = ok
                 self._hotkey_status_msg = msg
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
                 return "break"
             return "break"
 
@@ -201,9 +225,12 @@ class SettingsDialog:
 
     # ------------------------------------------------------------------ Chrome & Tabs
     def _rebuild_contents(self, preserve_pos: bool = False) -> None:
+        if self._closed or not self.win.winfo_exists():
+            return
         t = self.app._t
-        for child in self.win.winfo_children():
-            child.destroy()
+        saved_pos = None
+        if preserve_pos and self.win.winfo_ismapped():
+            saved_pos = (self.win.winfo_x(), self.win.winfo_y())
 
         pal = self.app._pal()
         self.win.title(t("set_win_title", ver=APP_VERSION))
@@ -212,8 +239,12 @@ class SettingsDialog:
         self._trend_photos.clear()
         self._order_rows.clear()
 
-        # Top header with segmented 4-tab bar
-        top = tk.Frame(self.win, bg=pal["bg_card"], padx=16, pady=10)
+        old_root = self._root_frame
+        container = tk.Frame(self.win, bg=pal["bg_main"])
+        self._root_frame = container
+
+        # Top header with segmented 5-tab bar
+        top = tk.Frame(container, bg=pal["bg_card"], padx=16, pady=9)
         top.pack(fill="x")
 
         tk.Label(
@@ -236,28 +267,30 @@ class SettingsDialog:
                 bg=pal["bg_btn_hover"] if active else pal["bg_main"],
                 fg=pal["accent_agy"] if active else pal["text_sec"],
                 font=self._f_h2 if active else self._f_body,
-                padx=10,
+                padx=8,
                 pady=4,
                 cursor="hand2",
             )
             lbl.pack(side="left", padx=1)
-            lbl.bind("<Button-1>", lambda _e, tab_id=tid: self.show_tab(tab_id))
+            lbl.bind("<Button-1>", lambda _e, tab_id=tid: self.show_tab(tab_id, raise_win=False))
 
-        tk.Frame(self.win, bg=pal["border"], height=1).pack(fill="x")
+        tk.Frame(container, bg=pal["border"], height=1).pack(fill="x")
 
         # Footer packed BEFORE body so it is never pushed off-screen
-        footer = tk.Frame(self.win, bg=pal["bg_card"], padx=16, pady=9)
+        footer = tk.Frame(container, bg=pal["bg_card"], padx=16, pady=8)
         footer.pack(side="bottom", fill="x")
-        tk.Frame(self.win, bg=pal["border"], height=1).pack(side="bottom", fill="x")
+        tk.Frame(container, bg=pal["border"], height=1).pack(side="bottom", fill="x")
 
         self._make_btn(footer, t("btn_open_data"), self._open_data_dir).pack(side="left")
         self._make_btn(footer, t("btn_close"), self.close, primary=True).pack(side="right")
 
-        body = tk.Frame(self.win, bg=pal["bg_main"], padx=16, pady=11)
+        body = tk.Frame(container, bg=pal["bg_main"], padx=16, pady=8)
         body.pack(fill="both", expand=True)
 
         if self.active_tab == "display":
             self._build_display_tab(body, pal)
+        elif self.active_tab == "themes":
+            self._build_themes_tab(body, pal)
         elif self.active_tab == "alerts":
             self._build_alerts_tab(body, pal)
         elif self.active_tab == "trends":
@@ -265,12 +298,18 @@ class SettingsDialog:
         else:
             self._build_help_tab(body, pal)
 
+        if old_root is not None:
+            try:
+                old_root.destroy()
+            except Exception:
+                pass
+        container.pack(fill="both", expand=True)
         self.win.update_idletasks()
 
     def _make_btn(self, parent: tk.Widget, text: str, cmd, primary: bool = False) -> tk.Label:
         pal = self.app._pal()
         bg = pal["accent_agy"] if primary else pal["bg_btn"]
-        fg = "#0B1120" if primary else pal["text_pri"]
+        fg = ("#0E1117" if self.app._is_dark_theme() else "#FFFFFF") if primary else pal["text_pri"]
         hover_bg = pal["accent_agy"] if primary else pal["bg_btn_hover"]
         btn = tk.Label(
             parent, text=text, bg=bg, fg=fg,
@@ -303,14 +342,21 @@ class SettingsDialog:
 
     # ------------------------------------------------------------------ Tab 1: Display & Order
     def _build_display_tab(self, body: tk.Frame, pal: Dict[str, str]) -> None:
+        from hud_app import PROVIDER_META, THEME_PALETTES
+
         t = self.app._t
+        is_5h_pri = self.app._primary_metric() == "5h"
+        cur_ut = self.app._ui_theme()
+        mode_key = "dark" if self.app._is_dark_theme() else "light"
 
         # Card 1: Compact Style Visual Preview Cards
-        sec1 = tk.Frame(body, bg=pal["bg_card"], padx=12, pady=9)
-        sec1.pack(fill="x", pady=(0, 8))
+        sec1 = tk.Frame(
+            body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=6
+        )
+        sec1.pack(fill="x", pady=(0, 6))
 
         s1_hdr = tk.Frame(sec1, bg=pal["bg_card"])
-        s1_hdr.pack(fill="x", pady=(0, 6))
+        s1_hdr.pack(fill="x", pady=(0, 5))
         tk.Label(s1_hdr, text=t("sec_style_title"), bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_h2).pack(side="left")
         tk.Label(s1_hdr, text=t("sec_style_hint"), bg=pal["bg_card"], fg=pal["text_muted"], font=self._f_small).pack(side="right")
 
@@ -340,18 +386,17 @@ class SettingsDialog:
                 highlightbackground=pal["accent_agy"] if selected else pal["border"],
                 highlightthickness=2 if selected else 1,
                 padx=6,
-                pady=5,
+                pady=4,
                 cursor="hand2",
             )
             pad_r = 6 if col_idx < len(COMPACT_STYLES) - 1 else 0
             outer_card.grid(row=0, column=col_idx, sticky="nsew", padx=(0, pad_r))
 
-            png = render_style_preview_png(st, pal, width=146, height=68)
-            photo = png_bytes_to_photoimage(png, master=self.win)
+            photo = self.app._get_style_preview_photo(st, width=156, height=74)
             self._preview_photos[st] = photo
 
             img_lbl = tk.Label(outer_card, image=photo, bg=pal["bg_main"], bd=0, cursor="hand2")
-            img_lbl.pack(pady=(0, 3))
+            img_lbl.pack(pady=(0, 2))
 
             t_lbl = tk.Label(
                 outer_card,
@@ -376,14 +421,18 @@ class SettingsDialog:
             def _bind_card(style_key: str, desc_txt: str, widgets: List[tk.Widget], card_f: tk.Frame) -> None:
                 def on_click(_e: tk.Event) -> None:
                     self.app._set_compact_style(style_key)
-                    self._rebuild_contents(preserve_pos=True)
+                    self._schedule_rebuild(preserve_pos=True)
 
                 def on_enter(_e: tk.Event) -> None:
+                    if self._closed or not card_f.winfo_exists() or not self._style_desc_lbl.winfo_exists():
+                        return
                     self._style_desc_lbl.configure(text=desc_txt.replace("\n", " "))
                     if self.app._compact_style() != style_key:
                         card_f.configure(highlightbackground=pal["text_muted"])
 
                 def on_leave(_e: tk.Event) -> None:
+                    if self._closed or not card_f.winfo_exists() or not self._style_desc_lbl.winfo_exists():
+                        return
                     cur = self.app._compact_style()
                     self._style_desc_lbl.configure(text=self.app._t(f"style_{cur}_desc").replace("\n", " "))
                     card_f.configure(highlightbackground=pal["accent_agy"] if cur == style_key else pal["border"])
@@ -395,37 +444,39 @@ class SettingsDialog:
 
             _bind_card(st, desc, [outer_card, img_lbl, t_lbl, s_lbl], outer_card)
 
-        self._style_desc_lbl.pack(fill="x", pady=(5, 0))
+        self._style_desc_lbl.pack(fill="x", pady=(3, 0))
 
         if cur_style == "slim":
             slim_row = tk.Frame(sec1, bg=pal["bg_card"])
-            slim_row.pack(fill="x", pady=(5, 0))
+            slim_row.pack(fill="x", pady=(3, 0))
             tk.Label(
                 slim_row, text=t("lbl_slim_sub"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_small
             ).pack(side="left")
             cur_sm = self.app._slim_sub_metric()
-            for mk, mkey in (("model", "opt_slim_model"), ("5h", "opt_slim_5h")):
+            sec_key = "opt_slim_7d" if is_5h_pri else "opt_slim_5h"
+            for mk, mkey in (("model", "opt_slim_model"), ("5h", sec_key)):
                 def _set_sm(val: str = mk) -> None:
                     self.app.cfg["slim_sub_metric"] = val
                     save_config(self.app.cfg)
                     self.app._refresh_ui(force_tray=False)
-                    self._rebuild_contents(preserve_pos=True)
+                    self._schedule_rebuild(preserve_pos=True)
 
                 self._make_seg_chip(slim_row, t(mkey), cur_sm == mk, _set_sm).pack(side="right", padx=(4, 0))
 
         # Card 2: AI Providers & Drag-and-Drop Custom Ordering
-        sec2 = tk.Frame(body, bg=pal["bg_card"], padx=12, pady=8)
-        sec2.pack(fill="x", pady=(0, 8))
+        sec2 = tk.Frame(
+            body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=6
+        )
+        sec2.pack(fill="x", pady=(0, 6))
 
         s2_hdr = tk.Frame(sec2, bg=pal["bg_card"])
-        s2_hdr.pack(fill="x", pady=(0, 5))
+        s2_hdr.pack(fill="x", pady=(0, 4))
         tk.Label(s2_hdr, text=t("sec_order_title"), bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_h2).pack(side="left")
         tk.Label(s2_hdr, text=t("sec_order_hint"), bg=pal["bg_card"], fg=pal["text_muted"], font=self._f_small).pack(side="right")
 
         self._order_list_frame = tk.Frame(sec2, bg=pal["bg_card"])
         self._order_list_frame.pack(fill="x")
 
-        from hud_app import PROVIDER_META
         order = self.app._provider_order()
         enabled_set = set(self.app._enabled_providers())
 
@@ -438,7 +489,7 @@ class SettingsDialog:
                 highlightbackground=pal["border"],
                 highlightthickness=1,
                 padx=8,
-                pady=4,
+                pady=3,
                 cursor="fleur",
             )
 
@@ -484,7 +535,7 @@ class SettingsDialog:
 
             def _toggle_p(p: str = prov) -> None:
                 self.app._toggle_provider(p)
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
             self._make_seg_chip(
                 row, t("chip_shown") if is_on else t("chip_hidden"), is_on, _toggle_p, accent=pal[accent_key]
@@ -508,74 +559,117 @@ class SettingsDialog:
 
         self._layout_order_rows()
 
-        # Card 3: Display Mode, Pace Tick, Theme & Language, Opacity
-        sec3 = tk.Frame(body, bg=pal["bg_card"], padx=12, pady=8)
+        # Card 3: Display Mode, Primary Metric & Urgent Emphasis, Visual UI Design Themes, Dark/Light & Language, Opacity
+        sec3 = tk.Frame(
+            body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=7
+        )
         sec3.pack(fill="x")
 
-        # Row 1: Display mode
+        # Row 1: Display mode + Pace tick
         r_mode = tk.Frame(sec3, bg=pal["bg_card"])
-        r_mode.pack(fill="x", pady=(0, 5))
+        r_mode.pack(fill="x", pady=(0, 4))
         tk.Label(r_mode, text=t("lbl_mode"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left")
 
-        is_used = self.app._display_mode() == "used"
-        for mval, mkey, macc in (("remaining", "chip_rem_pct", pal["accent_agy"]), ("used", "chip_used_pct", pal["accent_claude"])):
-            def _set_dm(v: str = mval) -> None:
-                if self.app._display_mode() != v:
-                    self.app._toggle_display_mode()
-                    self._rebuild_contents(preserve_pos=True)
-
-            self._make_seg_chip(r_mode, t(mkey), (is_used == (mval == "used")), _set_dm, accent=macc).pack(side="right", padx=(4, 0))
-
-        # Row 2: Dedicated clearly-visible Pace Tick toggle
-        r_pace = tk.Frame(sec3, bg=pal["bg_card"])
-        r_pace.pack(fill="x", pady=(0, 5))
-        tk.Label(r_pace, text=t("lbl_pace_row"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left")
         pace_on = bool(self.app.cfg.get("show_pace_marker", True))
 
         def _toggle_pace() -> None:
             self.app.cfg["show_pace_marker"] = not pace_on
             save_config(self.app.cfg)
             self.app._refresh_ui(force_tray=False)
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         self._make_seg_chip(
-            r_pace, t("chip_on") if pace_on else t("chip_off"), pace_on, _toggle_pace, accent=pal["good"]
-        ).pack(side="right")
+            r_mode, t("chip_pace_marker"), pace_on, _toggle_pace, accent=pal["good"], padx=7
+        ).pack(side="right", padx=(10, 0))
 
-        # Row 3: Theme (left) + Language (right)
-        r_tl = tk.Frame(sec3, bg=pal["bg_card"])
-        r_tl.pack(fill="x", pady=(0, 5))
+        is_used = self.app._display_mode() == "used"
+        for mval, mkey, macc in (("remaining", "chip_rem_pct", pal["accent_agy"]), ("used", "chip_used_pct", pal["accent_claude"])):
+            def _set_dm(v: str = mval) -> None:
+                if self.app._display_mode() != v:
+                    self.app._toggle_display_mode()
+                    self._schedule_rebuild(preserve_pos=True)
 
-        tk.Label(r_tl, text=t("lbl_theme"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left", padx=(0, 6))
+            self._make_seg_chip(r_mode, t(mkey), (is_used == (mval == "used")), _set_dm, accent=macc, padx=7).pack(side="right", padx=(4, 0))
+
+        # Row 2: Primary metric (Weekly 7d vs 5h) + Auto-emphasize urgent secondary
+        r_pri = tk.Frame(sec3, bg=pal["bg_card"])
+        r_pri.pack(fill="x", pady=(0, 5))
+        tk.Label(r_pri, text=t("lbl_primary_metric"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left")
+
+        emph_on = self.app._emphasize_urgent()
+
+        def _toggle_emph() -> None:
+            self.app.cfg["emphasize_urgent"] = not emph_on
+            save_config(self.app.cfg)
+            self.app._ring_photo_cache.clear()
+            self.app._refresh_ui(force_tray=False)
+            self._schedule_rebuild(preserve_pos=True)
+
+        self._make_seg_chip(
+            r_pri, t("chip_emph_urgent"), emph_on, _toggle_emph, accent=pal["warn"], padx=7
+        ).pack(side="right", padx=(10, 0))
+
+        for pval, pkey in (("5h", "chip_pri_5h"), ("weekly", "chip_pri_wk")):
+            def _set_pm(v: str = pval) -> None:
+                self.app._set_primary_metric(v)
+
+            self._make_seg_chip(
+                r_pri, t(pkey), self.app._primary_metric() == pval, _set_pm, accent=pal["accent_agy"], padx=7
+            ).pack(side="right", padx=(4, 0))
+
+        # Row 3: Quick UI Theme badge (clickable!) + jump to 11-Theme Gallery + Dark/Light Mode
+        r_ut = tk.Frame(sec3, bg=pal["bg_card"])
+        r_ut.pack(fill="x", pady=(0, 5))
+        tk.Label(r_ut, text=t("lbl_ui_theme"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left", padx=(0, 6))
+        ut_badge_wrap = tk.Frame(r_ut, bg=pal["border"], padx=1, pady=1, bd=0, highlightthickness=0, cursor="hand2")
+        ut_badge_wrap.pack(side="left", padx=(0, 6))
+        ut_badge_lbl = tk.Label(
+            ut_badge_wrap,
+            text=t(f"ut_{cur_ut}"),
+            bg=pal["bg_main"],
+            fg=pal["accent_agy"],
+            font=self._f_h2,
+            highlightthickness=0,
+            bd=0,
+            padx=8,
+            pady=2,
+            cursor="hand2",
+        )
+        ut_badge_lbl.pack()
+        ut_badge_wrap.bind("<Button-1>", lambda _e: self.show_tab("themes", raise_win=False))
+        ut_badge_lbl.bind("<Button-1>", lambda _e: self.show_tab("themes", raise_win=False))
+        self._make_seg_chip(
+            r_ut, t("btn_open_themes"), False, lambda: self.show_tab("themes", raise_win=False), padx=8
+        ).pack(side="left")
+
         cur_th = self.app._theme_mode()
-        for tval, tkey in (("auto", "theme_auto"), ("dark", "theme_dark"), ("light", "theme_light")):
+        for tval, tkey in (("light", "theme_light"), ("dark", "theme_dark"), ("auto", "theme_auto")):
             def _set_th(v: str = tval) -> None:
                 self.app.cfg["theme"] = v
                 save_config(self.app.cfg)
                 self.app._apply_theme()
-                self.refresh_theme()
 
-            self._make_seg_chip(r_tl, t(tkey), cur_th == tval, _set_th, padx=6).pack(side="left", padx=(0, 3))
+            self._make_seg_chip(r_ut, t(tkey), cur_th == tval, _set_th, padx=6).pack(side="right", padx=(3, 0))
+        tk.Label(r_ut, text=t("lbl_theme"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="right", padx=(8, 4))
 
+        # Row 4: Language (left) + Opacity (right)
+        r_lo = tk.Frame(sec3, bg=pal["bg_card"])
+        r_lo.pack(fill="x")
+        tk.Label(r_lo, text=t("lbl_lang"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left", padx=(0, 6))
         cur_lang_pref = str(self.app.cfg.get("language") or "auto").lower()
-        for lval, llbl in (("en", "EN"), ("ko", "한국어"), ("auto", t("lang_auto"))):
+        for lval, llbl in (("auto", t("lang_auto")), ("ko", "한국어"), ("en", "EN")):
             def _set_lang(v: str = lval) -> None:
                 self.app.cfg["language"] = v
                 save_config(self.app.cfg)
                 self.app._apply_language()
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
-            self._make_seg_chip(r_tl, llbl, cur_lang_pref == lval, _set_lang, padx=6).pack(side="right", padx=(3, 0))
-        tk.Label(r_tl, text=t("lbl_lang"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="right", padx=(8, 4))
+            self._make_seg_chip(r_lo, llbl, cur_lang_pref == lval, _set_lang, padx=6).pack(side="left", padx=(0, 3))
 
-        # Row 4: Opacity
-        r_op = tk.Frame(sec3, bg=pal["bg_card"])
-        r_op.pack(fill="x")
-        tk.Label(r_op, text=t("lbl_opacity"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="left")
         op_lbl = tk.Label(
-            r_op,
+            r_lo,
             text=f"{int(round(float(self.app.cfg['opacity']) * 100))}%",
-            bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_mono, width=5, anchor="e",
+            bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_mono, width=4, anchor="e",
         )
         op_lbl.pack(side="right")
 
@@ -586,18 +680,179 @@ class SettingsDialog:
             op_lbl.configure(text=f"{int(round(float(val) * 100))}%")
 
         tk.Scale(
-            r_op, from_=0.55, to=1.0, resolution=0.05, orient="horizontal", showvalue=False,
+            r_lo, from_=0.55, to=1.0, resolution=0.05, orient="horizontal", showvalue=False,
             variable=op_var, command=_on_op, bg=pal["bg_card"], fg=pal["text_pri"],
             troughcolor=pal["bg_track"], highlightthickness=0, bd=0, sliderrelief="flat",
-            activebackground=pal["accent_agy"], length=210, width=11,
-        ).pack(side="right", padx=(6, 4))
+            activebackground=pal["accent_agy"], length=140, width=11,
+        ).pack(side="right", padx=(4, 4))
+        tk.Label(r_lo, text=t("lbl_opacity"), bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body).pack(side="right", padx=(10, 2))
+
+    # ------------------------------------------------------------------ Tab 2: 9-Theme 3x3 Visual Gallery
+    def _build_themes_tab(self, body: tk.Frame, pal: Dict[str, str]) -> None:
+        t = self.app._t
+        cur_ut = self.app._ui_theme()
+        cur_style = self.app._compact_style()
+        mode_key = "dark" if self.app._is_dark_theme() else "light"
+
+        # Card 1: 3x3 Visual UI Design Theme Gallery
+        sec_g = tk.Frame(
+            body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=8
+        )
+        sec_g.pack(fill="x", pady=(0, 7))
+
+        ghdr = tk.Frame(sec_g, bg=pal["bg_card"])
+        ghdr.pack(fill="x", pady=(0, 5))
+        tk.Label(ghdr, text=t("sec_themes_title"), bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_h2).pack(side="left")
+
+        cur_th = self.app._theme_mode()
+        for tval, tkey in (("light", "theme_light"), ("dark", "theme_dark"), ("auto", "theme_auto")):
+            def _set_th(v: str = tval) -> None:
+                self.app.cfg["theme"] = v
+                save_config(self.app.cfg)
+                self.app._apply_theme()
+
+            self._make_seg_chip(ghdr, t(tkey), cur_th == tval, _set_th, padx=7).pack(side="right", padx=(3, 0))
+
+        desc_wrap = tk.Frame(sec_g, bg=pal["border"], padx=1, pady=1, bd=0, highlightthickness=0)
+        desc_wrap.pack(fill="x", pady=(0, 6))
+        self._ut_desc_lbl = tk.Label(
+            desc_wrap,
+            text=f"✦ {t(f'ut_{cur_ut}')} — {t(f'ut_{cur_ut}_desc')}",
+            bg=pal["bg_main"],
+            fg=pal["text_sec"],
+            font=self._f_small,
+            anchor="w",
+            padx=8,
+            pady=3,
+            bd=0,
+            highlightthickness=0,
+        )
+        self._ut_desc_lbl.pack(fill="x")
+
+        ut_grid = tk.Frame(sec_g, bg=pal["bg_card"])
+        ut_grid.pack(fill="x")
+        cols = 5
+        for idx, ut in enumerate(UI_THEMES):
+            r_i = idx // cols
+            c_i = idx % cols
+            ut_grid.grid_columnconfigure(c_i, weight=1, uniform="ut_gal")
+            selected = ut == cur_ut
+
+            tile = tk.Frame(
+                ut_grid,
+                bg=pal["bg_main"],
+                highlightbackground=pal["accent_agy"] if selected else pal["border"],
+                highlightthickness=2 if selected else 1,
+                padx=3,
+                pady=4,
+                cursor="hand2",
+            )
+            pad_r = 5 if c_i < cols - 1 else 0
+            pad_b = 6 if r_i < 2 else 0
+            tile.grid(row=r_i, column=c_i, sticky="nsew", padx=(0, pad_r), pady=(0, pad_b))
+
+            ut_photo = self.app._get_theme_card_photo(ut, mode_key, width=112, height=58)
+            self._preview_photos[f"gal_{ut}"] = ut_photo
+
+            img_w = tk.Label(tile, image=ut_photo, bg=pal["bg_main"], bd=0, cursor="hand2")
+            img_w.pack(pady=(0, 2))
+            name_w = tk.Label(
+                tile,
+                text=f"{t(f'ut_{ut}')} ✓" if selected else t(f"ut_{ut}"),
+                bg=pal["bg_main"],
+                fg=pal["accent_agy"] if selected else pal["text_pri"],
+                font=self._f_h2 if selected else self._f_small,
+                cursor="hand2",
+            )
+            name_w.pack()
+
+            def _bind_ut(u_key: str, widgets: List[tk.Widget], card_f: tk.Frame) -> None:
+                def on_click(_e: tk.Event) -> None:
+                    self.app._set_ui_theme(u_key)
+
+                def on_enter(_e: tk.Event) -> None:
+                    if self._closed or not card_f.winfo_exists() or not self._ut_desc_lbl.winfo_exists():
+                        return
+                    self._ut_desc_lbl.configure(text=f"✦ {self.app._t(f'ut_{u_key}')} — {self.app._t(f'ut_{u_key}_desc')}")
+                    if self.app._ui_theme() != u_key:
+                        card_f.configure(highlightbackground=pal["text_muted"])
+
+                def on_leave(_e: tk.Event) -> None:
+                    if self._closed or not card_f.winfo_exists() or not self._ut_desc_lbl.winfo_exists():
+                        return
+                    cur = self.app._ui_theme()
+                    self._ut_desc_lbl.configure(text=f"✦ {self.app._t(f'ut_{cur}')} — {self.app._t(f'ut_{cur}_desc')}")
+                    card_f.configure(highlightbackground=pal["accent_agy"] if cur == u_key else pal["border"])
+
+                for w in widgets:
+                    w.bind("<Button-1>", on_click)
+                    w.bind("<Enter>", on_enter)
+                    w.bind("<Leave>", on_leave)
+
+            _bind_ut(ut, [tile, img_w, name_w], tile)
+
+        # Card 2: Live 3-Style Preview Strip for Selected UI Theme
+        sec_p = tk.Frame(
+            body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=7
+        )
+        sec_p.pack(fill="x")
+
+        phdr = tk.Frame(sec_p, bg=pal["bg_card"])
+        phdr.pack(fill="x", pady=(0, 5))
+        tk.Label(phdr, text=t("sec_themes_preview"), bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_h2).pack(side="left")
+        tk.Label(
+            phdr,
+            text=f"{t(f'ut_{cur_ut}')} · {t('theme_dark') if mode_key == 'dark' else t('theme_light')}",
+            bg=pal["bg_card"],
+            fg=pal["accent_agy"],
+            font=self._f_h2,
+        ).pack(side="right")
+
+        pgrid = tk.Frame(sec_p, bg=pal["bg_card"])
+        pgrid.pack(fill="x")
+        for col_idx, st in enumerate(COMPACT_STYLES):
+            pgrid.grid_columnconfigure(col_idx, weight=1, uniform="gal_st")
+            selected = st == cur_style
+            box = tk.Frame(
+                pgrid,
+                bg=pal["bg_main"],
+                highlightbackground=pal["accent_agy"] if selected else pal["border"],
+                highlightthickness=2 if selected else 1,
+                padx=6,
+                pady=4,
+                cursor="hand2",
+            )
+            pad_r = 6 if col_idx < len(COMPACT_STYLES) - 1 else 0
+            box.grid(row=0, column=col_idx, sticky="nsew", padx=(0, pad_r))
+
+            sphoto = self.app._get_style_preview_photo(st, width=156, height=74)
+            self._preview_photos[f"gal_st_{st}"] = sphoto
+
+            s_img = tk.Label(box, image=sphoto, bg=pal["bg_main"], bd=0, cursor="hand2")
+            s_img.pack(pady=(0, 2))
+            s_lbl = tk.Label(
+                box,
+                text=f"{t(f'style_{st}_title')} ✓" if selected else t(f"style_{st}_title"),
+                bg=pal["bg_main"],
+                fg=pal["accent_agy"] if selected else pal["text_pri"],
+                font=self._f_h2 if selected else self._f_small,
+                cursor="hand2",
+            )
+            s_lbl.pack()
+
+            def _click_st(_e: tk.Event, s: str = st) -> None:
+                self.app._set_compact_style(s)
+                self._schedule_rebuild(preserve_pos=True)
+
+            for w in (box, s_img, s_lbl):
+                w.bind("<Button-1>", _click_st)
 
     # ------------------------------------------------------------------ Tab 2: Alerts, Hotkey & System
     def _build_alerts_tab(self, body: tk.Frame, pal: Dict[str, str]) -> None:
         t = self.app._t
 
         # Card 1: Custom Alert Thresholds
-        c1 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=10)
+        c1 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=10)
         c1.pack(fill="x", pady=(0, 9))
 
         c1_hdr = tk.Frame(c1, bg=pal["bg_card"])
@@ -608,7 +863,7 @@ class SettingsDialog:
 
         def _toggle_noti() -> None:
             self.app._toggle_notifications()
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         self._make_btn(c1_hdr, t("btn_alert_test"), self.app._test_notification).pack(side="right", padx=(6, 0))
         self._make_seg_chip(
@@ -627,7 +882,7 @@ class SettingsDialog:
                 self.app.cfg["notify_warn_pct"] = v
                 save_config(self.app.cfg)
                 self.app._reseed_notifications()
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
             self._make_seg_chip(r_warn, lbl, cur_w == val, _set_w, accent=pal["warn"], padx=7).pack(side="right", padx=(3, 0))
 
@@ -643,7 +898,7 @@ class SettingsDialog:
                 self.app.cfg["notify_crit_pct"] = v
                 save_config(self.app.cfg)
                 self.app._reseed_notifications()
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
             self._make_seg_chip(r_crit, lbl, cur_c == val, _set_c, accent=pal["low"], padx=7).pack(side="right", padx=(3, 0))
 
@@ -658,19 +913,19 @@ class SettingsDialog:
         def _toggle_reset_n() -> None:
             self.app.cfg["notify_on_reset"] = not on_reset
             save_config(self.app.cfg)
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         def _set_5h(val: bool) -> None:
             self.app.cfg["notify_include_5h"] = val
             save_config(self.app.cfg)
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         self._make_seg_chip(r_scope, t("chip_on_reset"), on_reset, _toggle_reset_n, accent=pal["expired"]).pack(side="right", padx=(6, 0))
         self._make_seg_chip(r_scope, t("chip_scope_all"), inc_5h, lambda: _set_5h(True)).pack(side="right", padx=(3, 0))
         self._make_seg_chip(r_scope, t("chip_scope_wk"), not inc_5h, lambda: _set_5h(False)).pack(side="right")
 
         # Card 2: Custom Global Hotkey
-        c2 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=10)
+        c2 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=10)
         c2.pack(fill="x", pady=(0, 9))
 
         c2_hdr = tk.Frame(c2, bg=pal["bg_card"])
@@ -684,7 +939,7 @@ class SettingsDialog:
             ok, msg = self.app._update_hotkey(not hk_on, hk_spec)
             self._hotkey_status_ok = ok
             self._hotkey_status_msg = msg
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         self._make_seg_chip(
             c2_hdr, t("chip_on") if hk_on else t("chip_off"), hk_on, _toggle_hk, accent=pal["good"]
@@ -713,13 +968,13 @@ class SettingsDialog:
             ok, msg = self.app._update_hotkey(True, "Ctrl+Alt+Q")
             self._hotkey_status_ok = ok
             self._hotkey_status_msg = msg
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         def _start_record() -> None:
             self._recording_hotkey = not self._recording_hotkey
             self._hotkey_status_msg = t("hk_hint") if self._recording_hotkey else ""
             self._hotkey_status_ok = True
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
             self.win.focus_force()
 
         self._make_btn(hk_row, t("btn_hk_default"), _reset_hk).pack(side="right", padx=(4, 0))
@@ -742,7 +997,7 @@ class SettingsDialog:
             ).pack(fill="x", pady=(5, 0))
 
         # Card 3: Auto-Refresh & System
-        c3 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=10)
+        c3 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=10)
         c3.pack(fill="x")
 
         r_iv = tk.Frame(c3, bg=pal["bg_card"])
@@ -753,7 +1008,7 @@ class SettingsDialog:
             def _set_iv(v: int = sec_v) -> None:
                 self.app.cfg["refresh_interval_sec"] = v
                 save_config(self.app.cfg)
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
             self._make_seg_chip(r_iv, t("min_fmt", m=mins), cur_iv == sec_v, _set_iv, padx=7).pack(side="right", padx=(3, 0))
 
@@ -762,11 +1017,11 @@ class SettingsDialog:
 
         def _toggle_ar() -> None:
             self.app._toggle_auto_refresh()
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         def _toggle_st() -> None:
             self.app._toggle_startup()
-            self._rebuild_contents(preserve_pos=True)
+            self._schedule_rebuild(preserve_pos=True)
 
         self._make_seg_chip(
             r_sys, t("chip_auto_refresh"), bool(self.app.cfg.get("auto_refresh", True)), _toggle_ar, accent=pal["good"]
@@ -809,7 +1064,7 @@ class SettingsDialog:
         for hrs, hkey in ((168.0, "period_7d"), (24.0, "period_24h")):
             def _set_h(v: float = hrs) -> None:
                 self.trend_hours = v
-                self._rebuild_contents(preserve_pos=True)
+                self._schedule_rebuild(preserve_pos=True)
 
             self._make_seg_chip(bar, t(hkey), abs(self.trend_hours - hrs) < 0.1, _set_h).pack(side="right", padx=(4, 0))
 
@@ -833,7 +1088,7 @@ class SettingsDialog:
             disp_wk = bucket_display_pct(wk_bkt, mode)
             pace = compute_pace(used_wk, wk_bkt.get("resets_at"), WEEKLY_WINDOW_SEC, now=now, mode=mode, lang=lang)
 
-            card = tk.Frame(body, bg=pal["bg_card"], padx=12, pady=8)
+            card = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=12, pady=8)
             card.pack(fill="x", pady=(0, 8 if idx < len(enabled) - 1 else 0))
 
             hdr = tk.Frame(card, bg=pal["bg_card"])
@@ -884,7 +1139,7 @@ class SettingsDialog:
     def _build_help_tab(self, body: tk.Frame, pal: Dict[str, str]) -> None:
         t = self.app._t
 
-        c1 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=9)
+        c1 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=9)
         c1.pack(fill="x", pady=(0, 8))
         tk.Label(c1, text=t("help_c1_title"), bg=pal["bg_card"], fg=pal["accent_agy"], font=self._f_h2, anchor="w").pack(fill="x", pady=(0, 5))
 
@@ -912,7 +1167,7 @@ class SettingsDialog:
             dot.pack(side="left", padx=(0, 4))
             tk.Label(col_row, text=t(lkey), bg=pal["bg_main"], fg=pal["text_sec"], font=self._f_small).pack(side="left", padx=(0, 14))
 
-        c2 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=9)
+        c2 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=9)
         c2.pack(fill="x", pady=(0, 8))
         tk.Label(c2, text=t("help_c2_title"), bg=pal["bg_card"], fg=pal["accent_agy"], font=self._f_h2, anchor="w").pack(fill="x", pady=(0, 5))
 
@@ -929,7 +1184,7 @@ class SettingsDialog:
             tk.Label(r, text=k_txt, bg=pal["bg_card"], fg=pal["text_pri"], font=self._f_h2, width=21, anchor="w").pack(side="left")
             tk.Label(r, text=v_txt, bg=pal["bg_card"], fg=pal["text_sec"], font=self._f_body, anchor="w").pack(side="left")
 
-        c3 = tk.Frame(body, bg=pal["bg_card"], padx=13, pady=9)
+        c3 = tk.Frame(body, bg=pal["bg_card"], highlightbackground=pal["border"], highlightthickness=1, padx=13, pady=9)
         c3.pack(fill="x")
         tk.Label(c3, text=t("help_c3_title"), bg=pal["bg_card"], fg=pal["accent_agy"], font=self._f_h2, anchor="w").pack(fill="x", pady=(0, 4))
         tk.Label(
@@ -992,7 +1247,10 @@ class SettingsDialog:
         info["frame"].configure(highlightbackground=pal["accent_agy"], highlightthickness=2)
         for w in info["bg_widgets"]:
             w.configure(bg=pal["bg_btn"])
-        info["rank"].configure(bg=pal["accent_agy"], fg="#0B1120")
+        info["rank"].configure(
+            bg=pal["accent_agy"],
+            fg="#0E1117" if self.app._is_dark_theme() else "#FFFFFF",
+        )
 
     def _on_order_drag_motion(self, event: tk.Event) -> None:
         prov = self._drag_prov

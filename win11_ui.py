@@ -8,6 +8,7 @@ import ctypes
 import re
 import subprocess
 import sys
+import time
 import tkinter as tk
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -119,17 +120,26 @@ if sys.platform == "win32":
     kernel32.GetTickCount.restype = wintypes.DWORD
 
 
+_MACOS_DARK_CACHE: Tuple[float, bool] = (0.0, True)
+
+
 def is_windows_dark_mode(system_surface: bool = False) -> bool:
-    """Detect OS Dark/Light theme (Windows Personalize registry or macOS AppleInterfaceStyle)."""
+    """Detect OS Dark/Light theme (Windows Personalize registry or cached macOS AppleInterfaceStyle)."""
+    global _MACOS_DARK_CACHE
     if sys.platform == "darwin":
+        now = time.monotonic()
+        if now - _MACOS_DARK_CACHE[0] < 5.0:
+            return _MACOS_DARK_CACHE[1]
         try:
             proc = subprocess.run(
                 ["defaults", "read", "-g", "AppleInterfaceStyle"],
                 capture_output=True, text=True, timeout=1.5,
             )
-            return proc.returncode == 0 and "dark" in proc.stdout.lower()
+            dark = proc.returncode == 0 and "dark" in proc.stdout.lower()
         except Exception:
-            return True
+            dark = _MACOS_DARK_CACHE[1]
+        _MACOS_DARK_CACHE = (now, dark)
+        return dark
     if sys.platform != "win32" or winreg is None:
         return True
     val_name = "SystemUsesLightTheme" if system_surface else "AppsUseLightTheme"
@@ -144,20 +154,24 @@ def is_windows_dark_mode(system_surface: bool = False) -> bool:
         return True
 
 
+_MACOS_CG_LIB: Any = None
+
+
 def get_idle_seconds() -> float:
     """Return seconds elapsed since the last mouse or keyboard input."""
+    global _MACOS_CG_LIB
     if sys.platform == "darwin":
         try:
-            proc = subprocess.run(
-                ["ioreg", "-c", "IOHIDSystem"],
-                capture_output=True, text=True, timeout=1.5,
-            )
-            m = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', proc.stdout)
-            if m:
-                return int(m.group(1)) / 1e9
+            if _MACOS_CG_LIB is None:
+                cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+                cg.CGEventSourceSecondsSinceLastEventType.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+                cg.CGEventSourceSecondsSinceLastEventType.restype = ctypes.c_double
+                _MACOS_CG_LIB = cg
+            # kCGEventSourceStateCombinedSessionState = 0, kCGAnyInputEventType = ~0
+            sec = float(_MACOS_CG_LIB.CGEventSourceSecondsSinceLastEventType(0, 0xFFFFFFFF))
+            return max(0.0, sec)
         except Exception:
-            pass
-        return 0.0
+            return 0.0
     if sys.platform != "win32" or user32 is None or kernel32 is None:
         return 0.0
     lii = _LASTINPUTINFO()
@@ -371,7 +385,6 @@ class FluentPopupMenu:
                     pass
                 if FluentPopupMenu._active is self:
                     FluentPopupMenu._active = None
-                self._master.after(250, self.close)
             return
 
         dark = is_windows_dark_mode(system_surface=system_surface) if force_dark is None else force_dark
