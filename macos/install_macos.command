@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI Usage Bar v1.8.5 — macOS 1-Click Installer (Apple Silicon & Intel)
+# AI Usage Bar v1.8.6 — macOS 1-Click Installer (Apple Silicon & Intel)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +17,7 @@ else
 fi
 
 echo "============================================"
-echo "  AI Usage Bar v1.8.5 — macOS Installer"
+echo "  AI Usage Bar v1.8.6 — macOS Installer"
 echo "============================================"
 
 # Prefer a modern Python 3 with Tk >= 8.6 (Homebrew, python.org, or uv) before system Python 3.9 (Tk 8.5)
@@ -137,8 +137,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <key>CFBundleName</key><string>AI Usage Bar</string>
     <key>CFBundleDisplayName</key><string>AI Usage Bar</string>
     <key>CFBundleIdentifier</key><string>com.hugreelab.aiusagebar</string>
-    <key>CFBundleVersion</key><string>1.8.5</string>
-    <key>CFBundleShortVersionString</key><string>1.8.5</string>
+    <key>CFBundleVersion</key><string>1.8.6</string>
+    <key>CFBundleShortVersionString</key><string>1.8.6</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>AIUsageBar</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>

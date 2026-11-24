@@ -138,7 +138,7 @@ python3 macos/build_macos.py
 ```
 
 ### GitHub Actions 자동 릴리스
-버전 태그(`git tag v1.8.5 && git push origin v1.8.5`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
+버전 태그(`git tag v1.8.6 && git push origin v1.8.6`)를 푸시하면 [`.github/workflows/release.yml`](.github/workflows/release.yml)가 Windows용 `AIUsageBar-Setup.exe`와 macOS용 `AIUsageBar-macOS.dmg`를 자동 빌드해 GitHub Releases에 첨부합니다.
 
 ---
 

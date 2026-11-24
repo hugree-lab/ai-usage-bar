@@ -692,12 +692,32 @@ class FluentTooltip:
             tip = tk.Toplevel(anchor)
             cls._active_win = tip
             cls._active_anchor = anchor
-            tip.overrideredirect(True)
-            tip.configure(bg=pal["bg"])
-            tip.attributes("-topmost", True)
-
-            body = tk.Frame(tip, bg=pal["bg"], padx=10, pady=7)
+            if sys.platform == "darwin":
+                # On macOS Tk 9.0, overrideredirect(True) forces a Toplevel to layer=0,
+                # which gets buried/clipped behind the pinned floating HUD (layer=19).
+                # Native MacWindowStyle "help noActivates" keeps the tooltip borderless
+                # at floating tooltip level (layer=19) directly above the pinned HUD.
+                tip.withdraw()
+                try:
+                    tip.tk.call("::tk::unsupported::MacWindowStyle", "style", tip._w, "help", "noActivates")
+                except Exception:
+                    tip.overrideredirect(True)
+                tip.configure(bg=pal["bg"])
+                body = tk.Frame(
+                    tip,
+                    bg=pal["bg"],
+                    highlightbackground=pal["border"],
+                    highlightthickness=1,
+                    padx=10,
+                    pady=7,
+                )
+            else:
+                tip.overrideredirect(True)
+                tip.configure(bg=pal["bg"])
+                tip.attributes("-topmost", True)
+                body = tk.Frame(tip, bg=pal["bg"], padx=10, pady=7)
             body.pack()
+            tip.bind("<ButtonPress-1>", lambda _e: cls.hide_active(), add="+")
 
             if img is not None:
                 tip._img_ref = img  # type: ignore[attr-defined]
@@ -750,8 +770,21 @@ class FluentTooltip:
             if py < wt + 6:
                 py = min(wb - th - 6, ay + ah + 6)
 
-            tip.geometry(f"{tw}x{th}+{px}+{py}")
-            tip.update_idletasks()
+            tip.geometry(f"{tw}x{th}{px:+d}{py:+d}")
+            if sys.platform == "darwin":
+                tip.deiconify()
+                tip.update_idletasks()
+                tip.geometry(f"{tw}x{th}{px:+d}{py:+d}")
+                try:
+                    top_owner = anchor.winfo_toplevel()
+                    tip.lift(top_owner)
+                except Exception:
+                    try:
+                        tip.lift()
+                    except Exception:
+                        pass
+            else:
+                tip.update_idletasks()
             if sys.platform == "win32" and user32 is not None:
                 hwnd = get_hwnd(tip)
                 apply_win11_dwm(

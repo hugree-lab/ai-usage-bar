@@ -1,4 +1,4 @@
-# AI Usage Bar — macOS Guide (`v1.8.5`)
+# AI Usage Bar — macOS Guide (`v1.8.6`)
 
 ## Option 1: Install from `.dmg` (Apple Silicon)
 

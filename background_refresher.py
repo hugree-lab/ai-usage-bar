@@ -1293,7 +1293,7 @@ def _query_codex_app_server(codex_exe: str, timeout: float = 6.5) -> Optional[Di
     try:
         assert proc.stdin is not None
         reqs = [
-            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.5"}}},
+            {"method": "initialize", "id": 1, "params": {"clientInfo": {"name": "AIUsageBar", "version": "1.8.6"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 2, "params": {}},
         ]
